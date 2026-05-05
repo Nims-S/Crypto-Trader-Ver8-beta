@@ -1,0 +1,3 @@
+- Root Ver7 modules should be retired after parity checks.
+- `.strategy_store.json` is treated as seed data, not source of truth.
+- Add DB migrations before live deployment.
