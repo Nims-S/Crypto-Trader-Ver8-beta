@@ -20,6 +20,7 @@ from research.validation import (
     split_walk_forward_window,
     summarize_walk_forward_reports,
 )
+from research.regime_evolution import build_regime_plans
 
 
 @dataclass(frozen=True)
@@ -62,8 +63,8 @@ def evaluate_candidate(*, candidate: Any, parent: dict[str, Any], symbol: str, t
     wf_reports = []
     for fold in build_walk_forward_folds(start, end, folds=max(1, folds)):
         splits = split_walk_forward_window(fold)
-        fold_result = {}
 
+        fold_result = {}
         for split_name, window in splits.items():
             res = _evaluate_variant(
                 symbol=symbol,
@@ -138,26 +139,42 @@ def run_evolution_cycle(config: EvolutionConfig, *, cycle_id: str | None = None)
         feedback = build_feedback_summary(symbol=symbol, timeframe=timeframe)
         parents = list_strategies(active_only=False)[: config.parents_per_pair]
 
-        if not parents:
-            seed = seed_strategy(symbol, timeframe)
-            parents = [{"strategy_id": seed.strategy_id, "parameters": seed.parameters}]
+        plans = build_regime_plans(parents, symbol=symbol, timeframe=timeframe)
 
-        for parent in parents:
-            candidates = mutate_parent(parent, symbol, timeframe, n_children=config.children_per_parent, seed=_stable_seed(symbol, timeframe), feedback=feedback, diversity_pool=parents)
+        for plan in plans:
+            plan_feedback = dict(feedback or {})
+            plan_feedback["mutation_directives"] = plan.directives
 
-            for c in candidates:
-                report = evaluate_candidate(
-                    candidate=c,
-                    parent=parent,
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    start=config.start,
-                    end=config.end,
-                    folds=config.folds,
-                    allow_shorts=config.allow_shorts,
-                    use_cache=config.use_cache,
+            selected_parents = [p for p in parents if (p.get("strategy_id") in plan.parent_ids)]
+
+            if not selected_parents:
+                seed = seed_strategy(symbol, timeframe)
+                selected_parents = [{"strategy_id": seed.strategy_id, "parameters": seed.parameters}]
+
+            for parent in selected_parents:
+                candidates = mutate_parent(
+                    parent,
+                    symbol,
+                    timeframe,
+                    n_children=config.children_per_parent,
+                    seed=_stable_seed(symbol, timeframe, plan.regime),
+                    feedback=plan_feedback,
+                    diversity_pool=parents,
                 )
-                results.append(report)
+
+                for c in candidates:
+                    report = evaluate_candidate(
+                        candidate=c,
+                        parent=parent,
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        start=config.start,
+                        end=config.end,
+                        folds=config.folds,
+                        allow_shorts=config.allow_shorts,
+                        use_cache=config.use_cache,
+                    )
+                    results.append(report)
 
     return {"cycle_id": cycle_id, "results": results}
 
