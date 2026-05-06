@@ -13,6 +13,11 @@ from execution.deployment import (
     summarize_deployment_state,
     update_live_metric,
 )
+from execution.live_regime import (
+    detect_live_regime,
+    load_snapshot_file,
+    route_live_strategies_from_snapshot,
+)
 from registry.store import get_strategy, list_evolution_runs, list_experiments, list_strategies, rank_strategies
 from research.candidate_generator import seed_strategy
 from research.feedback import build_feedback_summary
@@ -146,6 +151,21 @@ def cmd_drift(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_live_regime(args: argparse.Namespace) -> int:
+    features = json.loads(args.features or "{}")
+    htf = json.loads(args.htf_features or "{}") if args.htf_features else None
+    snapshot = detect_live_regime(features, htf_features=htf, symbol=args.symbol, timeframe=args.timeframe)
+    _print_json(snapshot.__dict__)
+    return 0
+
+
+def cmd_live_route(args: argparse.Namespace) -> int:
+    snapshot_map = load_snapshot_file(args.snapshot_file)
+    routed = route_live_strategies_from_snapshot(snapshot_map, limit=args.limit)
+    _print_json({"routed": routed})
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Crypto-Trader-Ver8-beta launcher")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -235,6 +255,18 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("drift", help="Evaluate drift for a strategy")
     p.add_argument("strategy_id")
     p.set_defaults(func=cmd_drift)
+
+    p = sub.add_parser("live-regime", help="Detect live regime from feature snapshot")
+    p.add_argument("--symbol", default="BTC/USDT")
+    p.add_argument("--timeframe", default="1d")
+    p.add_argument("--features", help="JSON string of features", default="{}")
+    p.add_argument("--htf-features", help="JSON string of HTF features", default=None)
+    p.set_defaults(func=cmd_live_regime)
+
+    p = sub.add_parser("live-route", help="Route strategies from snapshot file")
+    p.add_argument("--snapshot-file", required=True)
+    p.add_argument("--limit", type=int, default=5)
+    p.set_defaults(func=cmd_live_route)
 
     return parser
 
