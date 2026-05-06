@@ -312,30 +312,44 @@ def evaluate_candidate(
     )
     
     agent_score = full["score"]
+
+    # ✅ Monte Carlo FIRST (before promotion)
+    mc = run_monte_carlo(full["backtest"])
+
     base_status = classify_strategy_status(
         agent_score=agent_score,
         backtest=full["backtest"],
         walk_forward=wf_summary,
         timeframe=timeframe,
+        density_score = min(1.0, trades / 50)
     )
-    final_status = _promotion_status(base_status["status"], robustness["score"], agent_score["score"])
-    # HARD GATE
+
+    # initial promotion
+    final_status = _promotion_status(
+        base_status["status"],
+        robustness["score"],
+        agent_score["score"],
+    )
+
+    # ✅ HARD GATES (correct order)
     if not mc["passed"]:
         final_status = "candidate"
+
     if robustness["score"] < min_validated_robustness:
         final_status = "candidate"
     elif robustness["score"] < min_deployable_robustness and final_status == "deployable":
         final_status = "validated"
-    mc = run_monte_carlo(full["backtest"])
+
     metrics = {
         "backtest": full["backtest"],
         "agent_score": agent_score,
         "walk_forward": wf_summary,
         "robustness": robustness,
+        "monte_carlo": mc,
         "selected_status": final_status,
         "seed": seed,
-        "monte_carlo": mc,
     }
+
     return {
         "candidate_id": candidate_id,
         "parent_id": parent_id,
@@ -345,8 +359,18 @@ def evaluate_candidate(
         "metrics": metrics,
         "score": agent_score["score"],
         "robustness_score": robustness["score"],
-        "passed": bool(base_status["score_passed"]) and bool(wf_summary.get("passed")) and bool(robustness["passed"]),
-        "logic_hash": hashlib.sha256(json.dumps(parameters, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16],
+
+        # ✅ FIXED PASSED FLAG
+        "passed": (
+            bool(base_status["score_passed"])
+            and bool(wf_summary.get("passed"))
+            and bool(robustness["passed"])
+            and bool(mc["passed"])
+        ),
+
+        "logic_hash": hashlib.sha256(
+            json.dumps(parameters, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()[:16],
     }
 
 
