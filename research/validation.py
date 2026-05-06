@@ -1,4 +1,9 @@
-"""Validation helpers for the automated evolution loop."""
+"""Validation helpers for the automated evolution loop.
+
+Walk-forward v2 uses anchored expanding training windows plus fixed validation
+and test slices. This keeps the evaluation honest while avoiding the
+pathological "everything is a tiny fold" behavior that can flatten scores.
+"""
 
 from __future__ import annotations
 
@@ -16,9 +21,20 @@ class WalkForwardSplit:
     label: str
     start: str
     end: str
+    train_start: str | None = None
+    train_end: str | None = None
+    val_start: str | None = None
+    val_end: str | None = None
+    test_start: str | None = None
+    test_end: str | None = None
 
     def as_dict(self) -> dict[str, str]:
-        return {"label": self.label, "start": self.start, "end": self.end}
+        payload: dict[str, str] = {"label": self.label, "start": self.start, "end": self.end}
+        for key in ("train_start", "train_end", "val_start", "val_end", "test_start", "test_end"):
+            value = getattr(self, key)
+            if value is not None:
+                payload[key] = value
+        return payload
 
 
 TRADE_DENSITY_BASE = {
@@ -60,6 +76,29 @@ def _normalize_ratios(train_ratio: float, val_ratio: float, test_ratio: float) -
     return train_ratio / total, val_ratio / total, test_ratio / total
 
 
+def _choose_window_lengths(span: pd.Timedelta, folds: int) -> tuple[pd.Timedelta, pd.Timedelta, pd.Timedelta]:
+    """Pick practical walk-forward lengths from the total backtest span."""
+    requested_folds = max(1, int(folds))
+    if span <= pd.Timedelta(days=60):
+        # Very short spans do not support meaningful walk-forward splits.
+        return span * 0.60, span * 0.20, span * 0.20
+
+    # Anchored expanding training window with fixed validation/test slices.
+    test_len = max(pd.Timedelta(days=30), span * 0.12)
+    val_len = max(pd.Timedelta(days=21), span * 0.08)
+    initial_train_len = max(pd.Timedelta(days=120), span * 0.50)
+
+    # If the caller asks for many folds, compress the test step but keep enough
+    # room for a real validation/test pair.
+    if requested_folds > 1:
+        max_step = (span - initial_train_len - val_len - test_len) / max(1, requested_folds - 1)
+        if max_step > pd.Timedelta(0):
+            test_len = min(test_len, max_step)
+            test_len = max(pd.Timedelta(days=21), test_len)
+
+    return initial_train_len, val_len, test_len
+
+
 def build_walk_forward_folds(
     start: str,
     end: str,
@@ -71,8 +110,9 @@ def build_walk_forward_folds(
 ) -> list[WalkForwardSplit]:
     """Build rolling evaluation windows for walk-forward validation.
 
-    Each returned split is a full window that will later be subdivided into
-    train/validation/test slices by `split_walk_forward_window`.
+    Walk-forward v2 uses anchored expanding windows. The fold boundaries are
+    chosen once, then each fold is split into train/validation/test by
+    `split_walk_forward_window()`.
     """
     start_ts = _to_utc_timestamp(start)
     end_ts = _to_utc_timestamp(end)
@@ -81,31 +121,77 @@ def build_walk_forward_folds(
 
     train_ratio, val_ratio, test_ratio = _normalize_ratios(train_ratio, val_ratio, test_ratio)
     span = end_ts - start_ts
-
     requested_folds = max(1, int(folds))
-    # Use overlapping windows; if the requested fold count is high, keep each
-    # window large enough to still contain meaningful train/val/test slices.
-    window_fraction = min(0.95, max(0.30, 1.0 / max(2, requested_folds)))
-    window_len = span * window_fraction
-    if window_len <= pd.Timedelta(0):
-        return [WalkForwardSplit(label="fold_1", start=_iso(start_ts), end=_iso(end_ts))]
 
-    if requested_folds == 1:
-        return [WalkForwardSplit(label="fold_1", start=_iso(start_ts), end=_iso(start_ts + window_len))]
+    initial_train_len, val_len, test_len = _choose_window_lengths(span, requested_folds)
+    min_total_needed = initial_train_len + val_len + test_len
 
-    step = (span - window_len) / max(1, requested_folds - 1)
+    if requested_folds == 1 or span <= min_total_needed + pd.Timedelta(days=7):
+        # Fallback to a single anchored fold when the span is too short.
+        train_end = start_ts + max(initial_train_len, span * train_ratio)
+        val_end = min(end_ts, train_end + max(val_len, span * val_ratio))
+        test_end = min(end_ts, val_end + max(test_len, span * test_ratio))
+        return [
+            WalkForwardSplit(
+                label="fold_1",
+                start=_iso(start_ts),
+                end=_iso(test_end),
+                train_start=_iso(start_ts),
+                train_end=_iso(train_end),
+                val_start=_iso(train_end),
+                val_end=_iso(val_end),
+                test_start=_iso(val_end),
+                test_end=_iso(test_end),
+            )
+        ]
+
+    step = test_len
+    max_possible = int((span - min_total_needed) // step) + 1
+    fold_count = max(1, min(requested_folds, max_possible))
+
     folds_out: list[WalkForwardSplit] = []
-    for fold_idx in range(requested_folds):
-        fold_start = start_ts + (step * fold_idx)
-        fold_end = fold_start + window_len
-        if fold_end > end_ts:
-            fold_end = end_ts
-        if fold_end - fold_start < pd.Timedelta(days=5):
+    for fold_idx in range(fold_count):
+        train_end = start_ts + initial_train_len + (step * fold_idx)
+        val_start = train_end
+        val_end = val_start + val_len
+        test_start = val_end
+        test_end = test_start + test_len
+        if test_end > end_ts:
+            break
+        if test_end <= start_ts:
             continue
-        folds_out.append(WalkForwardSplit(label=f"fold_{fold_idx + 1}", start=_iso(fold_start), end=_iso(fold_end)))
+
+        folds_out.append(
+            WalkForwardSplit(
+                label=f"fold_{fold_idx + 1}",
+                start=_iso(start_ts),
+                end=_iso(test_end),
+                train_start=_iso(start_ts),
+                train_end=_iso(train_end),
+                val_start=_iso(val_start),
+                val_end=_iso(val_end),
+                test_start=_iso(test_start),
+                test_end=_iso(test_end),
+            )
+        )
 
     if not folds_out:
-        folds_out.append(WalkForwardSplit(label="fold_1", start=_iso(start_ts), end=_iso(end_ts)))
+        train_end = start_ts + max(initial_train_len, span * train_ratio)
+        val_end = min(end_ts, train_end + max(val_len, span * val_ratio))
+        test_end = min(end_ts, val_end + max(test_len, span * test_ratio))
+        folds_out.append(
+            WalkForwardSplit(
+                label="fold_1",
+                start=_iso(start_ts),
+                end=_iso(test_end),
+                train_start=_iso(start_ts),
+                train_end=_iso(train_end),
+                val_start=_iso(train_end),
+                val_end=_iso(val_end),
+                test_start=_iso(val_end),
+                test_end=_iso(test_end),
+            )
+        )
 
     return folds_out
 
@@ -117,7 +203,19 @@ def split_walk_forward_window(
     val_ratio: float = 0.2,
     test_ratio: float = 0.2,
 ) -> dict[str, dict[str, str]]:
-    """Split a fold window into train/val/test sections."""
+    """Split a fold window into train/val/test sections.
+
+    If the fold already contains explicit boundaries from walk-forward v2, those
+    are used directly. The ratio-based fallback preserves compatibility with
+    older fold objects and external callers.
+    """
+    if fold.train_start and fold.train_end and fold.val_start and fold.val_end and fold.test_start and fold.test_end:
+        return {
+            "train": {"start": fold.train_start, "end": fold.train_end},
+            "val": {"start": fold.val_start, "end": fold.val_end},
+            "test": {"start": fold.test_start, "end": fold.test_end},
+        }
+
     fold_start = _to_utc_timestamp(fold.start)
     fold_end = _to_utc_timestamp(fold.end)
     if fold_end <= fold_start:
