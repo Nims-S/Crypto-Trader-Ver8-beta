@@ -13,6 +13,7 @@ from registry.store import classify_strategy_status, list_strategies
 from research.candidate_generator import mutate_parent, seed_strategy
 from research.feedback import build_feedback_summary
 from research.monte_carlo import run_monte_carlo, infer_regime_hint
+from research.perturbation import run_perturbation
 from research.scoring import score_metrics
 from research.validation import (
     build_walk_forward_folds,
@@ -58,7 +59,6 @@ def evaluate_candidate(*, candidate: Any, parent: dict[str, Any], symbol: str, t
     if "error" in full:
         return {"status": "candidate", "error": full["error"]}
 
-    # FIXED WALK-FORWARD (real splits)
     wf_reports = []
     for fold in build_walk_forward_folds(start, end, folds=max(1, folds)):
         splits = split_walk_forward_window(fold)
@@ -85,16 +85,27 @@ def evaluate_candidate(*, candidate: Any, parent: dict[str, Any], symbol: str, t
 
     wf_summary = summarize_walk_forward_reports(wf_reports, timeframe=timeframe)
 
-    # Infer regime
-    regime = infer_regime_hint({"parameters": parameters, "tags": getattr(candidate, "tags", [])}, full["backtest"])
+    perturb = run_perturbation(
+        symbol=symbol,
+        timeframe=timeframe,
+        start=start,
+        end=end,
+        base_parameters=parameters,
+        allow_shorts=allow_shorts,
+        use_cache=use_cache,
+    )
 
-    # Monte Carlo
+    regime = infer_regime_hint({"parameters": parameters, "tags": getattr(candidate, "tags", [])}, full["backtest"])
     mc = run_monte_carlo(full["backtest"], regime=regime)
 
     agent_score = full["score"]
-    base_status = classify_strategy_status(agent_score=agent_score, backtest=full["backtest"], walk_forward=wf_summary, timeframe=timeframe)
 
-    passed = bool(agent_score.get("passed")) and bool(wf_summary.get("passed")) and bool(mc.get("passed"))
+    passed = (
+        bool(agent_score.get("passed"))
+        and bool(wf_summary.get("passed"))
+        and bool(mc.get("passed"))
+        and bool(perturb.get("passed"))
+    )
 
     if passed:
         final_status = "deployable"
@@ -110,6 +121,7 @@ def evaluate_candidate(*, candidate: Any, parent: dict[str, Any], symbol: str, t
             "agent_score": agent_score,
             "walk_forward": wf_summary,
             "monte_carlo": mc,
+            "perturbation": perturb,
         },
         "score": agent_score.get("score", 0.0),
         "regime": regime,
