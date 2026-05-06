@@ -2,6 +2,12 @@ from __future__ import annotations
 
 import importlib
 import sys
+from pathlib import Path
+
+# Ensure project root is in PYTHONPATH
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 MODULES = [
     "execution.backtest.core",
@@ -28,17 +34,17 @@ def check_imports() -> list[str]:
 def check_functions() -> list[str]:
     errors: list[str] = []
     try:
-        from execution.backtest.core import run_backtest  # noqa
+        from execution.backtest.core import run_backtest  # noqa: F401
     except Exception as e:
         errors.append(f"missing run_backtest: {e}")
 
     try:
-        from execution.deployment import build_deployment_plan  # noqa
+        from execution.deployment import build_deployment_plan  # noqa: F401
     except Exception as e:
         errors.append(f"missing deployment: {e}")
 
     try:
-        from research.monte_carlo import run_monte_carlo  # noqa
+        from research.monte_carlo import run_monte_carlo  # noqa: F401
     except Exception as e:
         errors.append(f"missing monte carlo: {e}")
 
