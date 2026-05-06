@@ -9,6 +9,7 @@ from execution.backtest.core import run_backtest
 from registry.store import get_strategy, list_evolution_runs, list_experiments, list_strategies, rank_strategies
 from research.candidate_generator import seed_strategy
 from research.feedback import build_feedback_summary
+from research.loop import EvolutionConfig, run_continuous_loop, run_evolution_cycle
 
 
 def _print_json(data: Any) -> None:
@@ -70,6 +71,40 @@ def cmd_seed(args: argparse.Namespace) -> int:
     return 0
 
 
+def _build_evolution_config(args: argparse.Namespace) -> EvolutionConfig:
+    symbols = tuple(s.strip() for s in args.symbols.split(",") if s.strip())
+    timeframes = tuple(t.strip() for t in args.timeframes.split(",") if t.strip())
+    return EvolutionConfig(
+        symbols=symbols or ("BTC/USDT",),
+        timeframes=timeframes or ("1d",),
+        start=args.start,
+        end=args.end,
+        folds=max(1, int(args.folds)),
+        parents_per_pair=max(1, int(args.parents_per_pair)),
+        children_per_parent=max(1, int(args.children_per_parent)),
+        use_cache=not args.no_cache,
+        allow_shorts=args.allow_shorts,
+        retain_top_n=max(1, int(args.retain_top_n)),
+        min_deployable_robustness=float(args.min_deployable_robustness),
+        min_validated_robustness=float(args.min_validated_robustness),
+        perturbation_trials=max(1, int(args.perturbation_trials)),
+    )
+
+
+def cmd_evolve(args: argparse.Namespace) -> int:
+    config = _build_evolution_config(args)
+    result = run_evolution_cycle(config)
+    _print_json(result)
+    return 0
+
+
+def cmd_loop(args: argparse.Namespace) -> int:
+    config = _build_evolution_config(args)
+    result = run_continuous_loop(config, interval_seconds=max(0, int(args.interval_seconds)), cycles=args.cycles)
+    _print_json({"runs": result})
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Crypto-Trader-Ver8-beta launcher")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -111,6 +146,40 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--timeframe", default="1d")
     p.add_argument("--family", default="evo")
     p.set_defaults(func=cmd_seed)
+
+    p = sub.add_parser("evolve", help="Run one autonomous research cycle")
+    p.add_argument("--symbols", default="BTC/USDT")
+    p.add_argument("--timeframes", default="1d")
+    p.add_argument("--start", default="2024-01-01")
+    p.add_argument("--end", default="2025-01-01")
+    p.add_argument("--folds", type=int, default=3)
+    p.add_argument("--parents-per-pair", type=int, default=3)
+    p.add_argument("--children-per-parent", type=int, default=3)
+    p.add_argument("--retain-top-n", type=int, default=10)
+    p.add_argument("--perturbation-trials", type=int, default=3)
+    p.add_argument("--min-deployable-robustness", type=float, default=0.65)
+    p.add_argument("--min-validated-robustness", type=float, default=0.50)
+    p.add_argument("--allow-shorts", action="store_true")
+    p.add_argument("--no-cache", action="store_true")
+    p.set_defaults(func=cmd_evolve)
+
+    p = sub.add_parser("loop", help="Run repeated autonomous research cycles")
+    p.add_argument("--symbols", default="BTC/USDT")
+    p.add_argument("--timeframes", default="1d")
+    p.add_argument("--start", default="2024-01-01")
+    p.add_argument("--end", default="2025-01-01")
+    p.add_argument("--folds", type=int, default=3)
+    p.add_argument("--parents-per-pair", type=int, default=3)
+    p.add_argument("--children-per-parent", type=int, default=3)
+    p.add_argument("--retain-top-n", type=int, default=10)
+    p.add_argument("--perturbation-trials", type=int, default=3)
+    p.add_argument("--min-deployable-robustness", type=float, default=0.65)
+    p.add_argument("--min-validated-robustness", type=float, default=0.50)
+    p.add_argument("--allow-shorts", action="store_true")
+    p.add_argument("--no-cache", action="store_true")
+    p.add_argument("--interval-seconds", type=int, default=3600)
+    p.add_argument("--cycles", type=int, default=1)
+    p.set_defaults(func=cmd_loop)
 
     return parser
 
