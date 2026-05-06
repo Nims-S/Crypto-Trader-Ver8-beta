@@ -91,9 +91,6 @@ def _build_evolution_config(args: argparse.Namespace) -> EvolutionConfig:
         children_per_parent=max(1, int(args.children_per_parent)),
         use_cache=not args.no_cache,
         allow_shorts=args.allow_shorts,
-        perturbation_trials=max(1, int(args.perturbation_trials)),
-        min_deployable_robustness=float(args.min_deployable_robustness),
-        min_validated_robustness=float(args.min_validated_robustness),
     )
 
 
@@ -199,9 +196,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--folds", type=int, default=3)
     p.add_argument("--parents-per-pair", type=int, default=3)
     p.add_argument("--children-per-parent", type=int, default=3)
-    p.add_argument("--perturbation-trials", type=int, default=3)
-    p.add_argument("--min-deployable-robustness", type=float, default=0.65)
-    p.add_argument("--min-validated-robustness", type=float, default=0.50)
     p.add_argument("--allow-shorts", action="store_true")
     p.add_argument("--no-cache", action="store_true")
     p.set_defaults(func=cmd_evolve)
@@ -214,9 +208,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--folds", type=int, default=3)
     p.add_argument("--parents-per-pair", type=int, default=3)
     p.add_argument("--children-per-parent", type=int, default=3)
-    p.add_argument("--perturbation-trials", type=int, default=3)
-    p.add_argument("--min-deployable-robustness", type=float, default=0.65)
-    p.add_argument("--min-validated-robustness", type=float, default=0.50)
     p.add_argument("--allow-shorts", action="store_true")
     p.add_argument("--no-cache", action="store_true")
     p.add_argument("--interval-seconds", type=int, default=3600)
