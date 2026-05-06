@@ -5,10 +5,12 @@ import sys
 
 MODULES = [
     "execution.backtest.core",
+    "execution.deployment",
     "registry.store",
     "research.scoring",
     "research.candidate_generator",
     "research.feedback",
+    "research.monte_carlo",
     "strategy",
 ]
 
@@ -26,19 +28,19 @@ def check_imports() -> list[str]:
 def check_functions() -> list[str]:
     errors: list[str] = []
     try:
-        from execution.backtest.core import run_backtest  # noqa: F401
+        from execution.backtest.core import run_backtest  # noqa
     except Exception as e:
         errors.append(f"missing run_backtest: {e}")
 
     try:
-        from registry.store import list_strategies, rank_strategies  # noqa: F401
+        from execution.deployment import build_deployment_plan  # noqa
     except Exception as e:
-        errors.append(f"missing registry functions: {e}")
+        errors.append(f"missing deployment: {e}")
 
     try:
-        from strategy import generate_signal  # noqa: F401
+        from research.monte_carlo import run_monte_carlo  # noqa
     except Exception as e:
-        errors.append(f"missing generate_signal: {e}")
+        errors.append(f"missing monte carlo: {e}")
 
     return errors
 
