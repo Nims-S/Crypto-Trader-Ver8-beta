@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import product
 from typing import Any
-
+from research.monte_carlo import run_monte_carlo
 import pandas as pd
 
 from execution.backtest.core import run_backtest
@@ -310,7 +310,7 @@ def evaluate_candidate(
         allow_shorts=allow_shorts,
         use_cache=use_cache,
     )
-
+    
     agent_score = full["score"]
     base_status = classify_strategy_status(
         agent_score=agent_score,
@@ -319,11 +319,14 @@ def evaluate_candidate(
         timeframe=timeframe,
     )
     final_status = _promotion_status(base_status["status"], robustness["score"], agent_score["score"])
+    # HARD GATE
+    if not mc["passed"]:
+        final_status = "candidate"
     if robustness["score"] < min_validated_robustness:
         final_status = "candidate"
     elif robustness["score"] < min_deployable_robustness and final_status == "deployable":
         final_status = "validated"
-
+    mc = run_monte_carlo(full["backtest"])
     metrics = {
         "backtest": full["backtest"],
         "agent_score": agent_score,
@@ -331,6 +334,7 @@ def evaluate_candidate(
         "robustness": robustness,
         "selected_status": final_status,
         "seed": seed,
+        "monte_carlo": mc,
     }
     return {
         "candidate_id": candidate_id,

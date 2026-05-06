@@ -1,127 +1,113 @@
 from __future__ import annotations
 
-import math
 import random
-import statistics
-from typing import Any, Iterable
-
-from registry.store import export_trade_history
-
-
-def _returns_from_trades(trades: Iterable[dict]) -> list[float]:
-    out: list[float] = []
-    for t in trades:
-        pnl = t.get("pnl", None)
-        if pnl is None:
-            continue
-        try:
-            out.append(float(pnl))
-        except Exception:
-            continue
-    return out
+from dataclasses import dataclass
+from statistics import mean, pstdev
+from typing import Any
 
 
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except Exception:
-        return default
+@dataclass(frozen=True)
+class MonteCarloConfig:
+    iterations: int = 300
+    seed: int = 42
+    initial_equity: float = 10000.0
+    slippage_bps_mean: float = 2.0
+    slippage_bps_std: float = 1.0
+    return_noise_std: float = 0.05
+    min_p05_return_pct: float = 0.0
+    max_p95_drawdown_pct: float = 25.0
+    max_failure_rate: float = 0.30
 
 
-def _drawdown_stats(equity_path: list[float]) -> float:
-    if not equity_path:
-        return 0.0
-    peak = equity_path[0]
-    max_dd = 0.0
-    for x in equity_path:
-        peak = max(peak, x)
-        max_dd = min(max_dd, x - peak)
-    return max_dd
+def _trade_pnls(bt: dict[str, Any]) -> list[float]:
+    trades = bt.get("trades_detail") or []
+    pnls = [float(t.get("pnl", 0.0)) for t in trades if isinstance(t, dict)]
+    if pnls:
+        return pnls
+
+    # fallback
+    avg = float(bt.get("avg_trade_pnl", 0.0))
+    n = int(bt.get("trades", 0))
+    return [avg] * n if n > 0 else []
 
 
-def _bootstrap_paths(returns: list[float], simulations: int, horizon: int, seed: int) -> list[list[float]]:
-    rng = random.Random(seed)
-    paths: list[list[float]] = []
-    for _ in range(max(1, simulations)):
-        equity = 0.0
-        path = []
-        for _ in range(max(1, horizon)):
-            equity += rng.choice(returns)
-            path.append(equity)
-        paths.append(path)
-    return paths
+def _drawdown(curve: list[float]) -> float:
+    peak = curve[0]
+    worst = 0.0
+    for v in curve:
+        peak = max(peak, v)
+        dd = (v - peak) / peak * 100 if peak > 0 else 0
+        worst = min(worst, dd)
+    return worst
 
 
-def run_monte_carlo_from_trades(
-    trades: list[dict[str, Any]],
-    *,
-    simulations: int = 1000,
-    horizon: int | None = None,
-    seed: int = 42,
-) -> dict[str, Any]:
-    returns = _returns_from_trades(trades)
-    if not returns:
-        return {"error": "no_trade_history"}
-    horizon = int(horizon or len(returns) or 1)
-    paths = _bootstrap_paths(returns, simulations=simulations, horizon=horizon, seed=seed)
-    finals = [p[-1] for p in paths if p]
-    dds = [_drawdown_stats(p) for p in paths if p]
-    finals_sorted = sorted(finals)
-    p5_idx = max(0, int(math.floor(0.05 * (len(finals_sorted) - 1))))
-    p95_idx = max(0, int(math.floor(0.95 * (len(finals_sorted) - 1))))
+def _profit_factor(pnls):
+    win = sum(p for p in pnls if p > 0)
+    loss = abs(sum(p for p in pnls if p < 0))
+    return win / loss if loss > 0 else win
+
+
+def _simulate(pnls, cfg, rng):
+    sampled = [rng.choice(pnls) for _ in range(len(pnls))]
+
+    eq = cfg.initial_equity
+    curve = [eq]
+
+    for p in sampled:
+        noise = rng.gauss(0, cfg.return_noise_std)
+        slip = abs(p) * (rng.gauss(cfg.slippage_bps_mean, cfg.slippage_bps_std) / 10000)
+
+        pnl = p * (1 + noise) - slip
+        eq += pnl
+        curve.append(eq)
+
     return {
-        "simulations": int(simulations),
-        "horizon": horizon,
-        "mean_final": statistics.mean(finals),
-        "median_final": statistics.median(finals),
-        "p5": finals_sorted[p5_idx],
-        "p95": finals_sorted[p95_idx],
-        "avg_drawdown": statistics.mean(dds),
-        "worst_drawdown": min(dds) if dds else 0.0,
-        "return_sample_count": len(returns),
+        "return_pct": (eq / cfg.initial_equity - 1) * 100,
+        "max_dd": abs(_drawdown(curve)),
+        "pf": _profit_factor(sampled),
+        "wr": sum(1 for p in sampled if p > 0) / len(sampled),
     }
 
 
-def run_monte_carlo_from_summary(
-    summary: dict[str, Any],
-    *,
-    simulations: int = 1000,
-    seed: int = 42,
-) -> dict[str, Any]:
-    trades = int(summary.get("trades", 0) or 0)
-    if trades <= 0:
-        return {"error": "no_trade_history"}
+def run_monte_carlo(backtest: dict[str, Any]) -> dict:
+    pnls = _trade_pnls(backtest)
 
-    win_rate = min(0.99, max(0.01, _safe_float(summary.get("win_rate", 0.0), 0.0)))
-    pf = max(0.1, _safe_float(summary.get("profit_factor", 1.0), 1.0))
-    avg_trade = _safe_float(summary.get("avg_trade_pnl", 0.0), 0.0)
-    return_pct = _safe_float(summary.get("return_pct", 0.0), 0.0)
-    scale = max(abs(avg_trade), abs(return_pct) * 100.0 / max(trades, 1), 0.1)
+    if not pnls:
+        return {"passed": False, "score": 0, "reason": "no_trades"}
 
-    win_mean = scale * max(1.0, pf)
-    loss_mean = -scale
-    win_std = max(0.05, abs(win_mean) * 0.25)
-    loss_std = max(0.05, abs(loss_mean) * 0.25)
+    cfg = MonteCarloConfig()
+    rng = random.Random(cfg.seed)
 
-    rng = random.Random(seed)
-    synth_returns: list[float] = []
-    for _ in range(trades):
-        if rng.random() < win_rate:
-            synth_returns.append(rng.normalvariate(win_mean, win_std))
-        else:
-            synth_returns.append(rng.normalvariate(loss_mean, loss_std))
+    sims = [_simulate(pnls, cfg, rng) for _ in range(cfg.iterations)]
 
-    return run_monte_carlo_from_trades([{ "pnl": r } for r in synth_returns], simulations=simulations, horizon=trades, seed=seed)
+    returns = sorted(s["return_pct"] for s in sims)
+    dds = sorted(s["max_dd"] for s in sims)
 
+    p05 = returns[int(0.05 * len(returns))]
+    p50 = returns[int(0.50 * len(returns))]
+    p95_dd = dds[int(0.95 * len(dds))]
 
-def run_monte_carlo(
-    strategy_id: str | None = None,
-    *,
-    simulations: int = 1000,
-    horizon: int | None = None,
-    seed: int = 42,
-) -> dict[str, Any]:
-    trades = export_trade_history(strategy_id=strategy_id)
-    if trades:
-        return run_monte_carlo_from_trades(trades, simulations=simulations, horizon=horizon, seed=seed)
-    return {"error": "no_trade_history"}
+    failure = sum(1 for s in sims if s["return_pct"] <= 0) / len(sims)
+
+    passed = (
+        p05 >= cfg.min_p05_return_pct
+        and p95_dd <= cfg.max_p95_drawdown_pct
+        and failure <= cfg.max_failure_rate
+    )
+
+    score = (
+        0.4 * max(0, p50 / 10)
+        + 0.4 * max(0, p05 / 5)
+        + 0.2 * max(0, 1 - p95_dd / cfg.max_p95_drawdown_pct)
+    )
+
+    return {
+        "passed": passed,
+        "score": round(score, 4),
+        "summary": {
+            "p05": p05,
+            "p50": p50,
+            "p95_dd": p95_dd,
+            "failure_rate": failure,
+        },
+    }
