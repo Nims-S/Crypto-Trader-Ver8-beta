@@ -25,7 +25,9 @@ def _recent_cross_above(series_a: pd.Series, series_b: pd.Series, lookback: int 
 
 
 def _htf_confirm(df_htf: pd.DataFrame | None, cfg: dict) -> bool:
-    if df_htf is None or len(df_htf) < 220:
+    if not bool(cfg.get("use_htf_filter", True)):
+        return True
+    if df_htf is None or len(df_htf) < 120:
         return True
     h = df_htf.iloc[-1]
     close = float(h.get("close", 0))
@@ -37,15 +39,15 @@ def _htf_confirm(df_htf: pd.DataFrame | None, cfg: dict) -> bool:
     return bool(
         close > ema200
         and ema20 > ema50 > ema200
-        and adx >= float(cfg.get("htf_adx_min", 18.0))
-        and bb_rank >= float(cfg.get("htf_bb_rank_min", 0.30))
+        and adx >= float(cfg.get("htf_adx_min", 14.0))
+        and bb_rank >= float(cfg.get("htf_bb_rank_min", 0.20))
     )
 
 
 def generate(df: pd.DataFrame, symbol: str, state: StrategyState, df_htf: pd.DataFrame | None = None, strategy_override: dict | None = None):
     cfg = _cfg(strategy_override)
 
-    if df is None or len(df) < 260:
+    if df is None or len(df) < 200:
         return None
 
     df = compute_indicators(df) if "atr" not in df.columns else df
@@ -75,12 +77,12 @@ def generate(df: pd.DataFrame, symbol: str, state: StrategyState, df_htf: pd.Dat
     if not _htf_confirm(df_htf, cfg):
         return None
 
-    min_adx = float(cfg.get("min_adx", max(state.min_adx + 5.0, 23.0)))
-    min_bb_rank = float(cfg.get("min_bb_rank", 0.38))
-    min_atr_rank = float(cfg.get("min_atr_rank", 0.32))
-    rsi_min = float(cfg.get("rsi_min", 52.0))
-    rsi_max = float(cfg.get("rsi_max", 70.0))
-    vol_mult = float(cfg.get("volume_multiplier", 1.08))
+    min_adx = float(cfg.get("min_adx", max(state.min_adx + 2.0, 18.0)))
+    min_bb_rank = float(cfg.get("min_bb_rank", max(state.min_bb_rank, 0.24)))
+    min_atr_rank = float(cfg.get("min_atr_rank", max(state.min_atr_rank, 0.20)))
+    rsi_min = float(cfg.get("rsi_min", 48.0))
+    rsi_max = float(cfg.get("rsi_max", 72.0))
+    vol_mult = float(cfg.get("volume_multiplier", 1.02))
     pullback_lookback = int(cfg.get("pullback_lookback", 3))
     pullback_bars = int(cfg.get("pullback_bars", 1))
 
@@ -104,7 +106,7 @@ def generate(df: pd.DataFrame, symbol: str, state: StrategyState, df_htf: pd.Dat
     if not had_pullback:
         return None
 
-    if vol_sma > 0 and vol < vol_sma * vol_mult:
+    if bool(cfg.get("use_volume_filter", True)) and vol_sma > 0 and vol < vol_sma * vol_mult:
         return None
 
     entry = close
