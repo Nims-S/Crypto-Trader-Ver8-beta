@@ -14,7 +14,11 @@ from research.candidate_generator import mutate_parent, seed_strategy
 from research.feedback import build_feedback_summary
 from research.monte_carlo import run_monte_carlo, infer_regime_hint
 from research.scoring import score_metrics
-from research.validation import build_walk_forward_folds, summarize_walk_forward_reports
+from research.validation import (
+    build_walk_forward_folds,
+    split_walk_forward_window,
+    summarize_walk_forward_reports,
+)
 
 
 @dataclass(frozen=True)
@@ -54,24 +58,42 @@ def evaluate_candidate(*, candidate: Any, parent: dict[str, Any], symbol: str, t
     if "error" in full:
         return {"status": "candidate", "error": full["error"]}
 
-    # Walk-forward
+    # FIXED WALK-FORWARD (real splits)
     wf_reports = []
     for fold in build_walk_forward_folds(start, end, folds=max(1, folds)):
-        train = _evaluate_variant(symbol=symbol, timeframe=timeframe, start=fold.start, end=fold.end, parameters=parameters, allow_shorts=allow_shorts, use_cache=use_cache)
-        if "error" not in train:
-            wf_reports.append(train["backtest"])
+        splits = split_walk_forward_window(fold)
+        fold_result = {}
+
+        for split_name, window in splits.items():
+            res = _evaluate_variant(
+                symbol=symbol,
+                timeframe=timeframe,
+                start=window["start"],
+                end=window["end"],
+                parameters=parameters,
+                allow_shorts=allow_shorts,
+                use_cache=use_cache,
+            )
+
+            if "error" not in res:
+                fold_result[split_name] = res["backtest"]
+            else:
+                fold_result[split_name] = {}
+
+        if fold_result:
+            wf_reports.append(fold_result)
+
     wf_summary = summarize_walk_forward_reports(wf_reports, timeframe=timeframe)
 
-    # Infer regime (key upgrade)
+    # Infer regime
     regime = infer_regime_hint({"parameters": parameters, "tags": getattr(candidate, "tags", [])}, full["backtest"])
 
-    # Regime-aware Monte Carlo
+    # Monte Carlo
     mc = run_monte_carlo(full["backtest"], regime=regime)
 
     agent_score = full["score"]
     base_status = classify_strategy_status(agent_score=agent_score, backtest=full["backtest"], walk_forward=wf_summary, timeframe=timeframe)
 
-    # Promotion logic (strict + regime-aware)
     passed = bool(agent_score.get("passed")) and bool(wf_summary.get("passed")) and bool(mc.get("passed"))
 
     if passed:
