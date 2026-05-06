@@ -91,10 +91,9 @@ def _build_evolution_config(args: argparse.Namespace) -> EvolutionConfig:
         children_per_parent=max(1, int(args.children_per_parent)),
         use_cache=not args.no_cache,
         allow_shorts=args.allow_shorts,
-        retain_top_n=max(1, int(args.retain_top_n)),
+        perturbation_trials=max(1, int(args.perturbation_trials)),
         min_deployable_robustness=float(args.min_deployable_robustness),
         min_validated_robustness=float(args.min_validated_robustness),
-        perturbation_trials=max(1, int(args.perturbation_trials)),
     )
 
 
@@ -200,7 +199,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--folds", type=int, default=3)
     p.add_argument("--parents-per-pair", type=int, default=3)
     p.add_argument("--children-per-parent", type=int, default=3)
-    p.add_argument("--retain-top-n", type=int, default=10)
     p.add_argument("--perturbation-trials", type=int, default=3)
     p.add_argument("--min-deployable-robustness", type=float, default=0.65)
     p.add_argument("--min-validated-robustness", type=float, default=0.50)
@@ -216,7 +214,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--folds", type=int, default=3)
     p.add_argument("--parents-per-pair", type=int, default=3)
     p.add_argument("--children-per-parent", type=int, default=3)
-    p.add_argument("--retain-top-n", type=int, default=10)
     p.add_argument("--perturbation-trials", type=int, default=3)
     p.add_argument("--min-deployable-robustness", type=float, default=0.65)
     p.add_argument("--min-validated-robustness", type=float, default=0.50)
