@@ -18,6 +18,18 @@ def _normalize_mode(mode: Any) -> str:
     return ""
 
 
+def _override_mode(strategy_override: dict[str, Any] | None) -> str:
+    if not isinstance(strategy_override, dict):
+        return ""
+    direct = _normalize_mode(strategy_override.get("entry_mode"))
+    if direct:
+        return direct
+    nested = strategy_override.get("parameters")
+    if isinstance(nested, dict):
+        return _normalize_mode(nested.get("entry_mode"))
+    return ""
+
+
 def generate_signal(
     df,
     state: StrategyState,
@@ -25,8 +37,8 @@ def generate_signal(
     df_htf=None,
     strategy_override: dict[str, Any] | None = None,
 ):
-    if strategy_override:
-        mode = _normalize_mode(strategy_override.get("entry_mode"))
+    mode = _override_mode(strategy_override)
+    if mode:
         if mode == "trend":
             return trend_generate(df, symbol, state, df_htf=df_htf, strategy_override=strategy_override)
         if mode == "breakout":
