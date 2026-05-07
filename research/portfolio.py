@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from math import sqrt
+from statistics import mean
 from typing import Any, Iterable, Sequence
 
 from research.monte_carlo import infer_regime_hint
@@ -96,6 +98,65 @@ def _portfolio_score(row: dict[str, Any]) -> float:
         + 0.10 * max(0.0, 1.0 - min(dd / 20.0, 1.0))
         + 0.10 * robustness
     )
+
+
+def _trade_pnls(row: dict[str, Any]) -> list[float]:
+    metrics = row.get("metrics") or {}
+    bt = metrics.get("backtest") or {}
+    trades = bt.get("trades_detail") or []
+    pnls: list[float] = []
+    for trade in trades:
+        if isinstance(trade, dict):
+            pnls.append(_safe_float(trade.get("pnl", 0.0), 0.0))
+    if pnls:
+        return pnls
+    avg = _safe_float(bt.get("avg_trade_pnl", 0.0), 0.0)
+    n = int(bt.get("trades", 0) or 0)
+    return [avg] * n if n > 0 else []
+
+
+def _pearson_corr(a: Sequence[float], b: Sequence[float]) -> float:
+    if len(a) < 2 or len(b) < 2:
+        return 0.0
+    n = min(len(a), len(b))
+    x = list(a[:n])
+    y = list(b[:n])
+    mx = mean(x)
+    my = mean(y)
+    vx = sum((v - mx) ** 2 for v in x)
+    vy = sum((v - my) ** 2 for v in y)
+    if vx <= 0 or vy <= 0:
+        return 0.0
+    cov = sum((x[i] - mx) * (y[i] - my) for i in range(n))
+    return max(-1.0, min(1.0, cov / sqrt(vx * vy)))
+
+
+def _correlation_penalty(row: dict[str, Any], selected: Sequence[dict[str, Any]]) -> float:
+    if not selected:
+        return 0.0
+    row_pnls = _trade_pnls(row)
+    if not row_pnls:
+        return 0.0
+
+    penalties: list[float] = []
+    row_symbol = _market_pair(row)[0].lower()
+    row_regime = _regime_from_row(row)
+    for other in selected:
+        other_pnls = _trade_pnls(other)
+        if not other_pnls:
+            continue
+        corr = abs(_pearson_corr(row_pnls, other_pnls))
+        other_symbol = _market_pair(other)[0].lower()
+        other_regime = _regime_from_row(other)
+        structural = 0.0
+        if row_symbol and row_symbol == other_symbol:
+            structural += 0.15
+        if row_regime and row_regime == other_regime:
+            structural += 0.10
+        penalties.append(min(0.55, corr * 0.45 + structural))
+    if not penalties:
+        return 0.0
+    return max(0.0, min(0.65, mean(penalties)))
 
 
 def select_portfolio_candidates(
@@ -286,6 +347,11 @@ def build_portfolio_summary(
 
     weights = _normalize_weights(None, len(selected))
     evaluation = evaluate_portfolio_combination([c.row for c in selected], weights=weights, total_capital=total_capital)
+    correlation_penalties = []
+    for idx, candidate in enumerate(selected):
+        penalty = _correlation_penalty(candidate.row, [c.row for c in selected[:idx]])
+        correlation_penalties.append(round(penalty, 6))
+
     portfolio = {
         "regime": regime,
         "selected": [
@@ -295,8 +361,9 @@ def build_portfolio_summary(
                 "timeframe": c.timeframe,
                 "regime": c.regime,
                 "score": round(c.score, 6),
+                "correlation_penalty": correlation_penalties[i],
             }
-            for c in selected
+            for i, c in enumerate(selected)
         ],
         "summary": evaluation.summary,
         "curve": evaluation.curve,
