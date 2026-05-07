@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
 from execution.backtest.core import run_backtest
@@ -24,8 +25,22 @@ from research.feedback import build_feedback_summary
 from research.loop import EvolutionConfig, run_continuous_loop, run_evolution_cycle
 
 
-def _print_json(data: Any) -> None:
-    print(json.dumps(data, indent=2, sort_keys=True, default=str))
+def _json_text(data: Any) -> str:
+    return json.dumps(data, indent=2, sort_keys=True, default=str)
+
+
+def _print_json(data: Any) -> str:
+    text = _json_text(data)
+    print(text)
+    return text
+
+
+def _write_output_file(path: str | None, text: str) -> None:
+    if not path:
+        return
+    output_path = Path(path).expanduser()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(text + "\n", encoding="utf-8")
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -103,7 +118,8 @@ def _build_evolution_config(args: argparse.Namespace) -> EvolutionConfig:
 def cmd_evolve(args: argparse.Namespace) -> int:
     config = _build_evolution_config(args)
     result = run_evolution_cycle(config)
-    _print_json(result)
+    text = _print_json(result)
+    _write_output_file(args.output_file, text)
     return 0
 
 
@@ -220,6 +236,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--children-per-parent", type=int, default=3)
     p.add_argument("--allow-shorts", action="store_true")
     p.add_argument("--no-cache", action="store_true")
+    p.add_argument("--output-file", default=None, help="Write evolve output JSON to a text file")
     p.set_defaults(func=cmd_evolve)
 
     p = sub.add_parser("loop", help="Run repeated autonomous research cycles")
