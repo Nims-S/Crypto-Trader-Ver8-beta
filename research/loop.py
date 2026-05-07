@@ -27,6 +27,7 @@ from research.regime_evolution import build_regime_plans
 class EvolutionConfig:
     symbols: tuple[str, ...] = ("BTC/USDT",)
     timeframes: tuple[str, ...] = ("1d",)
+    validation_symbols: tuple[str, ...] = ("ETH/USDT",)
     start: str = "2024-01-01"
     end: str = "2025-01-01"
     folds: int = 3
@@ -54,7 +55,68 @@ def _evaluate_variant(*, symbol: str, timeframe: str, start: str, end: str, para
     return {"backtest": result, "score": decision.as_dict()}
 
 
-def evaluate_candidate(*, candidate: Any, parent: dict[str, Any], symbol: str, timeframe: str, start: str, end: str, folds: int, allow_shorts: bool, use_cache: bool, mc_iterations: int = 300) -> dict[str, Any]:
+def _cross_symbol_validation(
+    *,
+    symbols: tuple[str, ...],
+    timeframe: str,
+    start: str,
+    end: str,
+    parameters: dict[str, Any],
+    allow_shorts: bool,
+    use_cache: bool,
+) -> dict[str, Any]:
+    reports = []
+    scores = []
+
+    for symbol in symbols:
+        result = _evaluate_variant(
+            symbol=symbol,
+            timeframe=timeframe,
+            start=start,
+            end=end,
+            parameters=parameters,
+            allow_shorts=allow_shorts,
+            use_cache=use_cache,
+        )
+
+        if "error" in result:
+            continue
+
+        score = float((result.get("score") or {}).get("score", 0.0))
+        passed = bool((result.get("score") or {}).get("passed", False))
+        scores.append(score)
+
+        reports.append(
+            {
+                "symbol": symbol,
+                "score": round(score, 6),
+                "passed": passed,
+                "backtest": result.get("backtest") or {},
+            }
+        )
+
+    if not reports:
+        return {
+            "passed": False,
+            "score": 0.0,
+            "reports": [],
+            "reason": "no_cross_symbol_reports",
+        }
+
+    mean_score = sum(scores) / len(scores)
+    pass_ratio = sum(1 for r in reports if r["passed"]) / len(reports)
+
+    passed = mean_score >= 0.35 and pass_ratio >= 0.5
+
+    return {
+        "passed": passed,
+        "score": round(mean_score, 6),
+        "pass_ratio": round(pass_ratio, 6),
+        "reports": reports,
+    }
+
+
+def evaluate_candidate(*, candidate: Any, parent: dict[str, Any], symbol: str, timeframe: str, start: str, end: str, folds: int, allow_shorts: bool, use_cache: bool, mc_iterations: int = 300, validation_symbols: tuple[str, ...] = ("ETH/USDT",)) -> dict[str, Any]:
     parameters = dict(getattr(candidate, "parameters", {}) or {})
 
     full = _evaluate_variant(symbol=symbol, timeframe=timeframe, start=start, end=end, parameters=parameters, allow_shorts=allow_shorts, use_cache=use_cache)
@@ -100,13 +162,33 @@ def evaluate_candidate(*, candidate: Any, parent: dict[str, Any], symbol: str, t
     regime = infer_regime_hint({"parameters": parameters, "tags": getattr(candidate, "tags", [])}, full["backtest"])
     mc = run_monte_carlo(full["backtest"], regime=regime, iterations=mc_iterations)
 
+    cross_symbol = _cross_symbol_validation(
+        symbols=tuple(s for s in validation_symbols if s != symbol),
+        timeframe=timeframe,
+        start=start,
+        end=end,
+        parameters=parameters,
+        allow_shorts=allow_shorts,
+        use_cache=use_cache,
+    )
+
     agent_score = full["score"]
+
+    trend_hardening = True
+    if regime == "trend":
+        trend_hardening = (
+            bool(mc.get("passed"))
+            and float((mc.get("summary") or {}).get("failure_rate", 1.0)) <= 0.25
+            and float((mc.get("summary") or {}).get("p05", -999.0)) >= -3.0
+        )
 
     passed = (
         bool(agent_score.get("passed"))
         and bool(wf_summary.get("passed"))
         and bool(mc.get("passed"))
         and bool(perturb.get("passed"))
+        and bool(cross_symbol.get("passed"))
+        and trend_hardening
     )
 
     if passed:
@@ -124,6 +206,7 @@ def evaluate_candidate(*, candidate: Any, parent: dict[str, Any], symbol: str, t
             "walk_forward": wf_summary,
             "monte_carlo": mc,
             "perturbation": perturb,
+            "cross_symbol": cross_symbol,
         },
         "score": agent_score.get("score", 0.0),
         "regime": regime,
@@ -140,7 +223,12 @@ def run_evolution_cycle(config: EvolutionConfig, *, cycle_id: str | None = None)
         feedback = build_feedback_summary(symbol=symbol, timeframe=timeframe)
         parents = list_strategies(active_only=False)[: config.parents_per_pair]
 
-        plans = build_regime_plans(parents, symbol=symbol, timeframe=timeframe)
+        plans = build_regime_plans(
+            parents,
+            symbol=symbol,
+            timeframe=timeframe,
+            parent_limits={"trend": 2, "breakout": 3, "mean_reversion": 5},
+        )
 
         for plan in plans:
             plan_feedback = dict(feedback or {})
@@ -175,6 +263,7 @@ def run_evolution_cycle(config: EvolutionConfig, *, cycle_id: str | None = None)
                         allow_shorts=config.allow_shorts,
                         use_cache=config.use_cache,
                         mc_iterations=config.mc_iterations,
+                        validation_symbols=config.validation_symbols,
                     )
                     results.append(report)
 
