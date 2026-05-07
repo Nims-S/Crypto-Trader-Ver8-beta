@@ -96,6 +96,7 @@ def _build_evolution_config(args: argparse.Namespace) -> EvolutionConfig:
         children_per_parent=max(1, int(args.children_per_parent)),
         use_cache=not args.no_cache,
         allow_shorts=args.allow_shorts,
+        mc_iterations=max(10, int(args.mc_iterations)),
     )
 
 
@@ -214,6 +215,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--start", default="2024-01-01")
     p.add_argument("--end", default="2025-01-01")
     p.add_argument("--folds", type=int, default=3)
+    p.add_argument("--mc-iterations", type=int, default=300)
     p.add_argument("--parents-per-pair", type=int, default=3)
     p.add_argument("--children-per-parent", type=int, default=3)
     p.add_argument("--allow-shorts", action="store_true")
@@ -226,6 +228,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--start", default="2024-01-01")
     p.add_argument("--end", default="2025-01-01")
     p.add_argument("--folds", type=int, default=3)
+    p.add_argument("--mc-iterations", type=int, default=300)
     p.add_argument("--parents-per-pair", type=int, default=3)
     p.add_argument("--children-per-parent", type=int, default=3)
     p.add_argument("--allow-shorts", action="store_true")
