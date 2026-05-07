@@ -100,9 +100,11 @@ def cmd_seed(args: argparse.Namespace) -> int:
 
 def _build_evolution_config(args: argparse.Namespace) -> EvolutionConfig:
     symbols = tuple(s.strip() for s in args.symbols.split(",") if s.strip())
+    validation_symbols = tuple(s.strip() for s in args.validation_symbols.split(",") if s.strip())
     timeframes = tuple(t.strip() for t in args.timeframes.split(",") if t.strip())
     return EvolutionConfig(
         symbols=symbols or ("BTC/USDT",),
+        validation_symbols=validation_symbols or ("ETH/USDT",),
         timeframes=timeframes or ("1d",),
         start=args.start,
         end=args.end,
@@ -227,6 +229,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("evolve", help="Run one autonomous research cycle")
     p.add_argument("--symbols", default="BTC/USDT")
+    p.add_argument("--validation-symbols", default="ETH/USDT,SOL/USDT")
     p.add_argument("--timeframes", default="1d")
     p.add_argument("--start", default="2024-01-01")
     p.add_argument("--end", default="2025-01-01")
@@ -241,6 +244,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("loop", help="Run repeated autonomous research cycles")
     p.add_argument("--symbols", default="BTC/USDT")
+    p.add_argument("--validation-symbols", default="ETH/USDT,SOL/USDT")
     p.add_argument("--timeframes", default="1d")
     p.add_argument("--start", default="2024-01-01")
     p.add_argument("--end", default="2025-01-01")
