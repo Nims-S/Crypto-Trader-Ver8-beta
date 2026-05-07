@@ -118,7 +118,20 @@ def cluster_parents_by_regime(parents: list[dict[str, Any]]) -> dict[str, list[d
     return clusters
 
 
-def build_regime_plans(parents: list[dict[str, Any]], *, symbol: str, timeframe: str, max_parents_per_regime: int = 3) -> list[RegimePlan]:
+def _parent_budget(regime: str, parent_limits: dict[str, int] | None) -> int:
+    defaults = {"trend": 2, "breakout": 3, "mean_reversion": 5}
+    if parent_limits:
+        defaults.update({str(k): int(v) for k, v in parent_limits.items() if int(v) > 0})
+    return max(1, int(defaults.get(regime, 2)))
+
+
+def build_regime_plans(
+    parents: list[dict[str, Any]],
+    *,
+    symbol: str,
+    timeframe: str,
+    parent_limits: dict[str, int] | None = None,
+) -> list[RegimePlan]:
     clusters = cluster_parents_by_regime(parents)
     plans: list[RegimePlan] = []
 
@@ -126,7 +139,8 @@ def build_regime_plans(parents: list[dict[str, Any]], *, symbol: str, timeframe:
         bucket = clusters.get(regime) or []
         if not bucket:
             continue
-        parent_ids = [str(p.get("strategy_id") or p.get("id") or "") for p in bucket[:max_parents_per_regime]]
+        limit = _parent_budget(regime, parent_limits)
+        parent_ids = [str(p.get("strategy_id") or p.get("id") or "") for p in bucket[:limit]]
         plans.append(
             RegimePlan(
                 regime=regime,
