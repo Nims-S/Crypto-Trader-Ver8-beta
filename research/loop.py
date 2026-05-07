@@ -13,6 +13,7 @@ from registry.store import classify_strategy_status, list_strategies
 from research.candidate_generator import mutate_parent, seed_strategy
 from research.feedback import build_feedback_summary
 from research.monte_carlo import run_monte_carlo, infer_regime_hint
+from research.portfolio import build_portfolio_summary
 from research.perturbation import run_perturbation
 from research.scoring import score_metrics
 from research.validation import (
@@ -215,6 +216,17 @@ def evaluate_candidate(*, candidate: Any, parent: dict[str, Any], symbol: str, t
     }
 
 
+def _portfolio_snapshot(*, regime: str = "mean_reversion", limit: int = 3, total_capital: float = 10000.0) -> dict[str, Any]:
+    strategies = list_strategies(active_only=False)
+    return build_portfolio_summary(
+        strategies,
+        regime=regime,
+        limit=limit,
+        unique_markets=True,
+        total_capital=total_capital,
+    )
+
+
 def run_evolution_cycle(config: EvolutionConfig, *, cycle_id: str | None = None) -> dict[str, Any]:
     cycle_id = cycle_id or f"cycle_{uuid.uuid4().hex[:8]}"
     results = []
@@ -267,7 +279,13 @@ def run_evolution_cycle(config: EvolutionConfig, *, cycle_id: str | None = None)
                     )
                     results.append(report)
 
-    return {"cycle_id": cycle_id, "results": results}
+    portfolio_summary = _portfolio_snapshot(regime="mean_reversion", limit=3, total_capital=10000.0)
+
+    return {
+        "cycle_id": cycle_id,
+        "results": results,
+        "portfolio_summary": portfolio_summary,
+    }
 
 
 def run_continuous_loop(config: EvolutionConfig, *, interval_seconds: int = 3600, cycles: int | None = None) -> list[dict[str, Any]]:
