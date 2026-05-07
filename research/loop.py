@@ -34,6 +34,7 @@ class EvolutionConfig:
     children_per_parent: int = 3
     use_cache: bool = True
     allow_shorts: bool = False
+    mc_iterations: int = 300
 
 
 def _now() -> str:
@@ -53,7 +54,7 @@ def _evaluate_variant(*, symbol: str, timeframe: str, start: str, end: str, para
     return {"backtest": result, "score": decision.as_dict()}
 
 
-def evaluate_candidate(*, candidate: Any, parent: dict[str, Any], symbol: str, timeframe: str, start: str, end: str, folds: int, allow_shorts: bool, use_cache: bool) -> dict[str, Any]:
+def evaluate_candidate(*, candidate: Any, parent: dict[str, Any], symbol: str, timeframe: str, start: str, end: str, folds: int, allow_shorts: bool, use_cache: bool, mc_iterations: int = 300) -> dict[str, Any]:
     parameters = dict(getattr(candidate, "parameters", {}) or {})
 
     full = _evaluate_variant(symbol=symbol, timeframe=timeframe, start=start, end=end, parameters=parameters, allow_shorts=allow_shorts, use_cache=use_cache)
@@ -97,7 +98,7 @@ def evaluate_candidate(*, candidate: Any, parent: dict[str, Any], symbol: str, t
     )
 
     regime = infer_regime_hint({"parameters": parameters, "tags": getattr(candidate, "tags", [])}, full["backtest"])
-    mc = run_monte_carlo(full["backtest"], regime=regime)
+    mc = run_monte_carlo(full["backtest"], regime=regime, iterations=mc_iterations)
 
     agent_score = full["score"]
 
@@ -173,6 +174,7 @@ def run_evolution_cycle(config: EvolutionConfig, *, cycle_id: str | None = None)
                         folds=config.folds,
                         allow_shorts=config.allow_shorts,
                         use_cache=config.use_cache,
+                        mc_iterations=config.mc_iterations,
                     )
                     results.append(report)
 
