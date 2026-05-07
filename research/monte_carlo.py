@@ -21,18 +21,19 @@ class MonteCarloConfig:
 
 
 # Regime defaults are intentionally different:
-# - trend: more slippage/noise tolerant, but still reject fragile tails.
+# - trend: stricter tail-risk gating because trend systems can look good on
+#   upside while failing hard in reversals.
 # - breakout: moderately tolerant, because breakouts can be noisy.
-# - mean_reversion: stricter on tail-risk and failure rate, because MR tends to
-#   look good in-sample but can decay sharply when structure changes.
+# - mean_reversion: strict on failure rate and drawdown tail, because MR tends
+#   to decay sharply when structure changes.
 REGIME_DEFAULTS: dict[str, dict[str, float]] = {
     "trend": {
         "min_p05_return_pct": 0.0,
-        "min_p50_return_pct": 0.15,
-        "max_p95_drawdown_pct": 20.0,
-        "max_failure_rate": 0.24,
-        "return_noise_std": 0.040,
-        "min_pf_floor": 1.10,
+        "min_p50_return_pct": 0.25,
+        "max_p95_drawdown_pct": 16.0,
+        "max_failure_rate": 0.18,
+        "return_noise_std": 0.035,
+        "min_pf_floor": 1.20,
     },
     "breakout": {
         "min_p05_return_pct": 0.0,
@@ -177,13 +178,13 @@ def _build_config(regime: str | None = None, backtest: dict[str, Any] | None = N
     # Stronger strategies get stricter tail gating; weak but viable strategies
     # are not over-penalized for being slightly noisy.
     if quality >= 0.75:
-        failure_adjust = -0.03
-        drawdown_adjust = -1.5
-        p50_adjust = 0.10
+        failure_adjust = -0.05
+        drawdown_adjust = -2.0
+        p50_adjust = 0.12
     elif quality >= 0.50:
-        failure_adjust = -0.01
-        drawdown_adjust = -0.5
-        p50_adjust = 0.05
+        failure_adjust = -0.02
+        drawdown_adjust = -0.75
+        p50_adjust = 0.06
     else:
         failure_adjust = 0.01
         drawdown_adjust = 0.5
