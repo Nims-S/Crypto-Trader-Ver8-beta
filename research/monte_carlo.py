@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from statistics import mean, pstdev
 from typing import Any
 
 
@@ -17,13 +16,48 @@ class MonteCarloConfig:
     min_p05_return_pct: float = 0.0
     max_p95_drawdown_pct: float = 25.0
     max_failure_rate: float = 0.30
+    min_p50_return_pct: float = 0.0
+    min_pf_floor: float = 1.0
 
 
+# Regime defaults are intentionally different:
+# - trend: more slippage/noise tolerant, but still reject fragile tails.
+# - breakout: moderately tolerant, because breakouts can be noisy.
+# - mean_reversion: stricter on tail-risk and failure rate, because MR tends to
+#   look good in-sample but can decay sharply when structure changes.
 REGIME_DEFAULTS: dict[str, dict[str, float]] = {
-    "trend": {"min_p05_return_pct": 0.0, "max_p95_drawdown_pct": 22.0, "max_failure_rate": 0.28, "return_noise_std": 0.045},
-    "breakout": {"min_p05_return_pct": 0.0, "max_p95_drawdown_pct": 24.0, "max_failure_rate": 0.30, "return_noise_std": 0.05},
-    "mean_reversion": {"min_p05_return_pct": 0.0, "max_p95_drawdown_pct": 18.0, "max_failure_rate": 0.22, "return_noise_std": 0.035},
-    "unknown": {"min_p05_return_pct": 0.0, "max_p95_drawdown_pct": 25.0, "max_failure_rate": 0.30, "return_noise_std": 0.05},
+    "trend": {
+        "min_p05_return_pct": 0.0,
+        "min_p50_return_pct": 0.15,
+        "max_p95_drawdown_pct": 20.0,
+        "max_failure_rate": 0.24,
+        "return_noise_std": 0.040,
+        "min_pf_floor": 1.10,
+    },
+    "breakout": {
+        "min_p05_return_pct": 0.0,
+        "min_p50_return_pct": 0.10,
+        "max_p95_drawdown_pct": 22.0,
+        "max_failure_rate": 0.26,
+        "return_noise_std": 0.045,
+        "min_pf_floor": 1.05,
+    },
+    "mean_reversion": {
+        "min_p05_return_pct": 0.0,
+        "min_p50_return_pct": 0.20,
+        "max_p95_drawdown_pct": 16.0,
+        "max_failure_rate": 0.18,
+        "return_noise_std": 0.032,
+        "min_pf_floor": 1.15,
+    },
+    "unknown": {
+        "min_p05_return_pct": 0.0,
+        "min_p50_return_pct": 0.10,
+        "max_p95_drawdown_pct": 22.0,
+        "max_failure_rate": 0.28,
+        "return_noise_std": 0.045,
+        "min_pf_floor": 1.0,
+    },
 }
 
 
@@ -120,14 +154,48 @@ def _simulate(pnls: list[float], cfg: MonteCarloConfig, rng: random.Random) -> d
     }
 
 
-def _build_config(regime: str | None = None) -> MonteCarloConfig:
+def _build_config(regime: str | None = None, backtest: dict[str, Any] | None = None) -> MonteCarloConfig:
     regime_key = (regime or "unknown").strip().lower()
     defaults = REGIME_DEFAULTS.get(regime_key, REGIME_DEFAULTS["unknown"])
+
+    # Quality-aware tightening:
+    # Better strategies are held to a slightly stricter minimum failure rate and
+    # p50 threshold, because they should survive a tougher distributional test.
+    bt = backtest or {}
+    trades = _safe_int(bt.get("trades", 0), 0)
+    pf = _safe_float(bt.get("profit_factor", 0.0), 0.0)
+    wr = _safe_float(bt.get("win_rate", 0.0), 0.0)
+    dd = abs(_safe_float(bt.get("max_drawdown_pct", 0.0), 0.0))
+
+    quality = 0.0
+    quality += 0.30 * max(0.0, min(1.0, (trades - 3) / 10.0))
+    quality += 0.30 * max(0.0, min(1.0, (pf - 1.0) / 2.5))
+    quality += 0.20 * max(0.0, min(1.0, (wr - 0.45) / 0.30))
+    quality += 0.20 * max(0.0, min(1.0, 1.0 - dd / 10.0))
+    quality = max(0.0, min(1.0, quality))
+
+    # Stronger strategies get stricter tail gating; weak but viable strategies
+    # are not over-penalized for being slightly noisy.
+    if quality >= 0.75:
+        failure_adjust = -0.03
+        drawdown_adjust = -1.5
+        p50_adjust = 0.10
+    elif quality >= 0.50:
+        failure_adjust = -0.01
+        drawdown_adjust = -0.5
+        p50_adjust = 0.05
+    else:
+        failure_adjust = 0.01
+        drawdown_adjust = 0.5
+        p50_adjust = 0.0
+
     return MonteCarloConfig(
         min_p05_return_pct=defaults["min_p05_return_pct"],
-        max_p95_drawdown_pct=defaults["max_p95_drawdown_pct"],
-        max_failure_rate=defaults["max_failure_rate"],
+        min_p50_return_pct=defaults["min_p50_return_pct"] + p50_adjust,
+        max_p95_drawdown_pct=max(5.0, defaults["max_p95_drawdown_pct"] + drawdown_adjust),
+        max_failure_rate=max(0.05, min(0.40, defaults["max_failure_rate"] + failure_adjust)),
         return_noise_std=defaults["return_noise_std"],
+        min_pf_floor=defaults["min_pf_floor"],
     )
 
 
@@ -142,7 +210,7 @@ def run_monte_carlo(
     if not pnls:
         return {"passed": False, "score": 0.0, "reason": "no_trades", "regime": regime or "unknown"}
 
-    cfg = _build_config(regime)
+    cfg = _build_config(regime, backtest)
     if iterations is not None:
         cfg = MonteCarloConfig(
             iterations=max(1, int(iterations)),
@@ -154,6 +222,8 @@ def run_monte_carlo(
             min_p05_return_pct=cfg.min_p05_return_pct,
             max_p95_drawdown_pct=cfg.max_p95_drawdown_pct,
             max_failure_rate=cfg.max_failure_rate,
+            min_p50_return_pct=cfg.min_p50_return_pct,
+            min_pf_floor=cfg.min_pf_floor,
         )
     else:
         cfg = MonteCarloConfig(
@@ -166,6 +236,8 @@ def run_monte_carlo(
             min_p05_return_pct=cfg.min_p05_return_pct,
             max_p95_drawdown_pct=cfg.max_p95_drawdown_pct,
             max_failure_rate=cfg.max_failure_rate,
+            min_p50_return_pct=cfg.min_p50_return_pct,
+            min_pf_floor=cfg.min_pf_floor,
         )
 
     rng = random.Random(cfg.seed)
@@ -173,22 +245,28 @@ def run_monte_carlo(
 
     returns = sorted(s["return_pct"] for s in sims)
     dds = sorted(s["max_dd"] for s in sims)
+    pfs = sorted(s["pf"] for s in sims)
 
     p05 = returns[int(0.05 * (len(returns) - 1))]
     p50 = returns[int(0.50 * (len(returns) - 1))]
     p95_dd = dds[int(0.95 * (len(dds) - 1))]
     failure = sum(1 for s in sims if s["return_pct"] <= 0) / len(sims)
+    pf_p50 = pfs[int(0.50 * (len(pfs) - 1))]
 
     passed = (
         p05 >= cfg.min_p05_return_pct
+        and p50 >= cfg.min_p50_return_pct
         and p95_dd <= cfg.max_p95_drawdown_pct
         and failure <= cfg.max_failure_rate
+        and pf_p50 >= cfg.min_pf_floor
     )
 
+    # Score rewards median upside, protects left tail, and rewards low drawdown.
     score = (
-        0.4 * max(0, p50 / 10)
-        + 0.4 * max(0, p05 / 5)
-        + 0.2 * max(0, 1 - p95_dd / cfg.max_p95_drawdown_pct)
+        0.35 * max(0, p50 / 10)
+        + 0.25 * max(0, p05 / 5)
+        + 0.20 * max(0, 1 - p95_dd / cfg.max_p95_drawdown_pct)
+        + 0.20 * max(0, min(1.0, (pf_p50 - 0.75) / 2.25))
     )
 
     return {
@@ -198,14 +276,17 @@ def run_monte_carlo(
         "config": {
             "iterations": cfg.iterations,
             "min_p05_return_pct": cfg.min_p05_return_pct,
+            "min_p50_return_pct": cfg.min_p50_return_pct,
             "max_p95_drawdown_pct": cfg.max_p95_drawdown_pct,
             "max_failure_rate": cfg.max_failure_rate,
+            "min_pf_floor": cfg.min_pf_floor,
             "return_noise_std": cfg.return_noise_std,
         },
         "summary": {
             "p05": p05,
             "p50": p50,
             "p95_dd": p95_dd,
+            "pf_p50": pf_p50,
             "failure_rate": failure,
         },
     }
