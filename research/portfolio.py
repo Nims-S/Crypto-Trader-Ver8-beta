@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from math import sqrt
 from statistics import mean
-from typing import Any, Iterable, Sequence
+from typing import Any, Sequence
 
 from research.monte_carlo import infer_regime_hint
 
@@ -17,6 +17,8 @@ class PortfolioCandidate:
     regime: str
     score: float
     row: dict[str, Any]
+    raw_score: float = 0.0
+    correlation_penalty: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,50 @@ def _regime_from_row(row: dict[str, Any]) -> str:
     }
     regime = row.get("regime") or row.get("regime_profile") or infer_regime_hint(candidate, bt)
     return str(regime or "unknown").strip().lower()
+
+
+def _strategy_matches_filters(
+    row: dict[str, Any],
+    *,
+    symbols: Sequence[str] | None = None,
+    timeframes: Sequence[str] | None = None,
+) -> bool:
+    symbol, timeframe = _market_pair(row)
+    tags = {str(t).strip().lower() for t in (row.get("tags") or []) if str(t).strip()}
+    symbol_filters = {str(s).strip().lower() for s in (symbols or []) if str(s).strip()}
+    timeframe_filters = {str(t).strip().lower() for t in (timeframes or []) if str(t).strip()}
+
+    if symbol_filters and symbol.lower() not in symbol_filters and symbol.lower() not in tags:
+        return False
+    if timeframe_filters and timeframe.lower() not in timeframe_filters and timeframe.lower() not in tags:
+        return False
+    return True
+
+
+def _eligible(row: dict[str, Any]) -> bool:
+    status = str(row.get("status") or "").lower()
+    if status not in {"deployable", "validated", "live"}:
+        return False
+
+    metrics = row.get("metrics") or {}
+    agent = metrics.get("agent_score") or {}
+    wf = metrics.get("walk_forward") or {}
+    mc = metrics.get("monte_carlo") or {}
+    perturb = metrics.get("perturbation") or {}
+    cross_symbol = metrics.get("cross_symbol") or {}
+
+    if not bool(agent.get("passed", False)):
+        return False
+    if not bool(wf.get("passed", False)):
+        return False
+    if not bool(mc.get("passed", False)):
+        return False
+    if not bool(perturb.get("passed", False)):
+        return False
+    if not bool(cross_symbol.get("passed", False)):
+        return False
+
+    return True
 
 
 def _portfolio_score(row: dict[str, Any]) -> float:
@@ -165,45 +211,68 @@ def select_portfolio_candidates(
     regime: str = "mean_reversion",
     limit: int = 3,
     unique_markets: bool = True,
+    symbols: Sequence[str] | None = None,
+    timeframes: Sequence[str] | None = None,
 ) -> list[PortfolioCandidate]:
     regime = str(regime or "mean_reversion").strip().lower()
     candidates: list[PortfolioCandidate] = []
-    seen: set[tuple[str, str]] = set()
 
     for row in strategies:
-        status = str(row.get("status") or "").lower()
-        if status not in {"deployable", "validated", "live"}:
+        if not _strategy_matches_filters(row, symbols=symbols, timeframes=timeframes):
+            continue
+        if not _eligible(row):
             continue
 
         row_regime = _regime_from_row(row)
         if regime and regime not in {"all", "any"} and row_regime != regime:
             continue
 
-        metrics = row.get("metrics") or {}
-        bt = metrics.get("backtest") or {}
-        if not bt:
-            continue
-
         symbol, timeframe = _market_pair(row)
-        key = (symbol, timeframe)
-        if unique_markets and key in seen:
-            continue
-        seen.add(key)
-
-        score = _portfolio_score(row)
+        raw_score = _portfolio_score(row)
         candidates.append(
             PortfolioCandidate(
                 strategy_id=str(row.get("strategy_id") or ""),
                 symbol=symbol,
                 timeframe=timeframe,
                 regime=row_regime,
-                score=score,
+                score=raw_score,
+                raw_score=raw_score,
                 row=dict(row),
             )
         )
 
-    candidates.sort(key=lambda c: (c.score, _safe_float((c.row.get("metrics") or {}).get("walk_forward", {}).get("score", 0.0), 0.0)), reverse=True)
-    return candidates[: max(1, int(limit))]
+    if not candidates:
+        return []
+
+    remaining = list(candidates)
+    selected: list[PortfolioCandidate] = []
+    used_markets: set[tuple[str, str]] = set()
+    limit = max(1, int(limit))
+
+    while remaining and len(selected) < limit:
+        best_index = None
+        best_adjusted = 0.0
+        best_penalty = 0.0
+
+        for idx, candidate in enumerate(remaining):
+            market_key = (candidate.symbol.lower(), candidate.timeframe.lower())
+            if unique_markets and market_key in used_markets:
+                continue
+            penalty = _correlation_penalty(candidate.row, [c.row for c in selected])
+            adjusted = max(0.0, candidate.raw_score - penalty)
+            if best_index is None or adjusted > best_adjusted:
+                best_index = idx
+                best_adjusted = adjusted
+                best_penalty = penalty
+
+        if best_index is None or best_adjusted <= 0.0:
+            break
+
+        candidate = remaining.pop(best_index)
+        selected.append(replace(candidate, score=best_adjusted, correlation_penalty=best_penalty))
+        used_markets.add((candidate.symbol.lower(), candidate.timeframe.lower()))
+
+    return selected
 
 
 def _normalize_weights(weights: Sequence[float] | None, n: int) -> list[float]:
@@ -335,8 +404,17 @@ def build_portfolio_summary(
     limit: int = 3,
     unique_markets: bool = True,
     total_capital: float = _BASE_EQUITY,
+    symbols: Sequence[str] | None = None,
+    timeframes: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    selected = select_portfolio_candidates(strategies, regime=regime, limit=limit, unique_markets=unique_markets)
+    selected = select_portfolio_candidates(
+        strategies,
+        regime=regime,
+        limit=limit,
+        unique_markets=unique_markets,
+        symbols=symbols,
+        timeframes=timeframes,
+    )
     if not selected:
         return {
             "regime": regime,
@@ -345,13 +423,8 @@ def build_portfolio_summary(
             "curve": [],
         }
 
-    weights = _normalize_weights(None, len(selected))
+    weights = _normalize_weights([c.score for c in selected], len(selected))
     evaluation = evaluate_portfolio_combination([c.row for c in selected], weights=weights, total_capital=total_capital)
-    correlation_penalties = []
-    for idx, candidate in enumerate(selected):
-        penalty = _correlation_penalty(candidate.row, [c.row for c in selected[:idx]])
-        correlation_penalties.append(round(penalty, 6))
-
     portfolio = {
         "regime": regime,
         "selected": [
@@ -361,9 +434,10 @@ def build_portfolio_summary(
                 "timeframe": c.timeframe,
                 "regime": c.regime,
                 "score": round(c.score, 6),
-                "correlation_penalty": correlation_penalties[i],
+                "raw_score": round(c.raw_score, 6),
+                "correlation_penalty": round(c.correlation_penalty, 6),
             }
-            for i, c in enumerate(selected)
+            for c in selected
         ],
         "summary": evaluation.summary,
         "curve": evaluation.curve,
