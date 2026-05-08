@@ -114,7 +114,8 @@ def _cap_context(routes: list[dict[str, Any]], state: dict[str, Any]) -> dict[st
     context: dict[str, dict[str, Any]] = {}
     for route in routes:
         sid = str(route.get("strategy_id") or "")
-        expected = (route.get("strategy") or {}).get("metrics") or {}
+        strategy = route.get("strategy") or {}
+        expected = (strategy.get("metrics") or {})
         live = live_metrics.get(sid) or {}
         drift = compare_performance(
             {
@@ -134,6 +135,22 @@ def _cap_context(routes: list[dict[str, Any]], state: dict[str, Any]) -> dict[st
             "drift": drift,
         }
     return context
+
+
+def _flatten_route(route: dict[str, Any]) -> dict[str, Any]:
+    strategy = route.get("strategy") or {}
+    metrics = strategy.get("metrics") or {}
+    flat = dict(strategy)
+    flat.setdefault("strategy_id", route.get("strategy_id") or strategy.get("strategy_id"))
+    flat.setdefault("symbol", route.get("symbol") or strategy.get("symbol") or (metrics.get("backtest") or {}).get("symbol"))
+    flat.setdefault("timeframe", route.get("timeframe") or strategy.get("timeframe") or (metrics.get("backtest") or {}).get("ltf_timeframe"))
+    flat.setdefault("regime", route.get("regime") or strategy.get("regime") or strategy.get("regime_profile"))
+    flat.setdefault("status", strategy.get("status") or "validated")
+    flat.setdefault("metrics", metrics)
+    flat.setdefault("tags", strategy.get("tags") or [])
+    flat.setdefault("parameters", strategy.get("parameters") or {})
+    flat.setdefault("active", strategy.get("active", True))
+    return flat
 
 
 def build_deployment_plan(
@@ -156,7 +173,8 @@ def build_deployment_plan(
     state = _load_state()
     routes = _pick_routes(symbol_list, timeframe_list, regimes=regimes, limit=limit)
     context = _cap_context(routes, state)
-    allocations = allocate_capital(routes, float(total_capital or DEFAULT_TOTAL_CAPITAL), temperature=temperature, context=context)
+    allocation_inputs = [_flatten_route(route) for route in routes]
+    allocations = allocate_capital(allocation_inputs, float(total_capital or DEFAULT_TOTAL_CAPITAL), temperature=temperature, context=context)
 
     actions: list[dict[str, Any]] = []
     for route, alloc in zip(routes, allocations):
