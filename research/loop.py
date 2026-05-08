@@ -9,18 +9,20 @@ from itertools import product
 from typing import Any
 
 from execution.backtest.core import run_backtest
-from registry.store import classify_strategy_status, list_strategies
+from registry.store import (
+    classify_strategy_status,
+    list_strategies,
+    record_evolution_run,
+    record_experiment,
+    upsert_strategy,
+)
 from research.candidate_generator import mutate_parent, seed_strategy
 from research.feedback import build_feedback_summary
-from research.monte_carlo import run_monte_carlo, infer_regime_hint
+from research.monte_carlo import infer_regime_hint, run_monte_carlo
 from research.portfolio import build_portfolio_summary
 from research.perturbation import run_perturbation
 from research.scoring import score_metrics
-from research.validation import (
-    build_walk_forward_folds,
-    split_walk_forward_window,
-    summarize_walk_forward_reports,
-)
+from research.validation import build_walk_forward_folds, split_walk_forward_window, summarize_walk_forward_reports
 from research.regime_evolution import build_regime_plans
 
 
@@ -115,6 +117,82 @@ def _cross_symbol_validation(
         "pass_ratio": round(pass_ratio, 6),
         "reports": reports,
     }
+
+
+def _persist_evaluation(
+    *,
+    candidate: Any,
+    parent: dict[str, Any],
+    report: dict[str, Any],
+    symbol: str,
+    timeframe: str,
+    cycle_id: str,
+) -> None:
+    metrics = report.get("metrics") or {}
+    backtest = metrics.get("backtest") or {}
+    mc = metrics.get("monte_carlo") or {}
+    perturb = metrics.get("perturbation") or {}
+    cross_symbol = metrics.get("cross_symbol") or {}
+    wf = metrics.get("walk_forward") or {}
+
+    candidate_id = str(getattr(candidate, "strategy_id", "") or f"evo_{symbol.lower().replace('/', '_')}_{timeframe}_{_stable_seed(cycle_id, symbol, timeframe)}")
+    parameters = dict(getattr(candidate, "parameters", {}) or {})
+    status = str(report.get("status") or "candidate")
+    regime = str(report.get("regime") or infer_regime_hint({"parameters": parameters, "tags": getattr(candidate, "tags", [])}, backtest) or "unknown")
+    robustness_score = float(mc.get("score", perturb.get("score", report.get("score", 0.0))) or 0.0)
+
+    upsert_strategy(
+        candidate_id,
+        base_strategy=str(getattr(candidate, "base_strategy", parent.get("strategy_id") or "seed")),
+        version=int(getattr(candidate, "version", 1) or 1),
+        status=status,
+        parameters=parameters,
+        metrics=metrics,
+        tags=list(getattr(candidate, "tags", []) or []) + [symbol, timeframe, regime],
+        source="evolution",
+        notes=f"cycle={cycle_id}",
+        active=bool(report.get("passed", False)),
+        validated_at=_now(),
+        regime_profile=regime,
+        robustness_score=robustness_score,
+        parent_strategy_id=str(parent.get("strategy_id") or "seed"),
+    )
+
+    record_experiment(
+        candidate_id,
+        symbol=symbol,
+        timeframe=timeframe,
+        run_type="evolution",
+        parameters=parameters,
+        metrics=metrics,
+        passed=bool(report.get("passed", False)),
+        notes=f"cycle={cycle_id}",
+    )
+
+    record_evolution_run(
+        cycle_id=cycle_id,
+        symbol=symbol,
+        timeframe=timeframe,
+        parent_strategy_id=str(parent.get("strategy_id") or "seed"),
+        child_strategy_id=candidate_id,
+        status=status,
+        score=float(report.get("score", 0.0) or 0.0),
+        passed=bool(report.get("passed", False)),
+        parameters=parameters,
+        metrics=metrics,
+        notes=f"regime={regime}; mc_passed={bool(mc.get('passed', False))}; perturb_passed={bool(perturb.get('passed', False))}; cross_symbol_passed={bool(cross_symbol.get('passed', False))}; wf_passed={bool(wf.get('passed', False))}",
+    )
+
+
+def _portfolio_snapshot(*, regime: str = "mean_reversion", limit: int = 3, total_capital: float = 10000.0) -> dict[str, Any]:
+    strategies = list_strategies(active_only=False)
+    return build_portfolio_summary(
+        strategies,
+        regime=regime,
+        limit=limit,
+        unique_markets=True,
+        total_capital=total_capital,
+    )
 
 
 def evaluate_candidate(*, candidate: Any, parent: dict[str, Any], symbol: str, timeframe: str, start: str, end: str, folds: int, allow_shorts: bool, use_cache: bool, mc_iterations: int = 300, validation_symbols: tuple[str, ...] = ("ETH/USDT",)) -> dict[str, Any]:
@@ -216,17 +294,6 @@ def evaluate_candidate(*, candidate: Any, parent: dict[str, Any], symbol: str, t
     }
 
 
-def _portfolio_snapshot(*, regime: str = "mean_reversion", limit: int = 3, total_capital: float = 10000.0) -> dict[str, Any]:
-    strategies = list_strategies(active_only=False)
-    return build_portfolio_summary(
-        strategies,
-        regime=regime,
-        limit=limit,
-        unique_markets=True,
-        total_capital=total_capital,
-    )
-
-
 def run_evolution_cycle(config: EvolutionConfig, *, cycle_id: str | None = None) -> dict[str, Any]:
     cycle_id = cycle_id or f"cycle_{uuid.uuid4().hex[:8]}"
     results = []
@@ -277,6 +344,7 @@ def run_evolution_cycle(config: EvolutionConfig, *, cycle_id: str | None = None)
                         mc_iterations=config.mc_iterations,
                         validation_symbols=config.validation_symbols,
                     )
+                    _persist_evaluation(candidate=c, parent=parent, report=report, symbol=symbol, timeframe=timeframe, cycle_id=cycle_id)
                     results.append(report)
 
     portfolio_summary = _portfolio_snapshot(regime="mean_reversion", limit=3, total_capital=10000.0)
