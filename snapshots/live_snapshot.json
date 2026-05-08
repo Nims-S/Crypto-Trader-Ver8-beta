@@ -1,0 +1,17 @@
+{
+  "BTC/USDT|1d": {
+    "symbol": "BTC/USDT",
+    "timeframe": "1d",
+    "features": {
+      "adx": 25,
+      "bb_width_rank": 0.6,
+      "atr_rank": 0.5,
+      "volume_rank": 0.7,
+      "slope": 0.2
+    },
+    "htf_features": {
+      "close": 50000,
+      "sma200": 48000
+    }
+  }
+}

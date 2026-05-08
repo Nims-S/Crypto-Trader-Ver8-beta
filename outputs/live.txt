@@ -1,0 +1,17 @@
+{
+  "confidence": 0.5275,
+  "features": {
+    "adx": 25.0,
+    "atr_rank": 0.5,
+    "bb_width_rank": 0.6,
+    "volume_rank": 0.7
+  },
+  "htf_features": {
+    "close": 50000.0,
+    "sma200": 48000.0
+  },
+  "notes": "trend_bias",
+  "regime": "trend",
+  "symbol": "BTC/USDT",
+  "timeframe": "1d"
+}
