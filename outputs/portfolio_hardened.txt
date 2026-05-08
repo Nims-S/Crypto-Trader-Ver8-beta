@@ -1,0 +1,9 @@
+{
+  "curve": [],
+  "regime": "mean_reversion",
+  "selected": [],
+  "summary": {
+    "passed": false,
+    "reason": "no_eligible_strategies"
+  }
+}
