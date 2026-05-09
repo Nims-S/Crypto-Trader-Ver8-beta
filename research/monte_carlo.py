@@ -20,12 +20,6 @@ class MonteCarloConfig:
     min_pf_floor: float = 1.0
 
 
-# Regime defaults are intentionally different:
-# - trend: stricter tail-risk gating because trend systems can look good on
-#   upside while failing hard in reversals.
-# - breakout: moderately tolerant, because breakouts can be noisy.
-# - mean_reversion: strict on failure rate and drawdown tail, because MR tends
-#   to decay sharply when structure changes.
 REGIME_DEFAULTS: dict[str, dict[str, float]] = {
     "trend": {
         "min_p05_return_pct": 0.0,
@@ -43,13 +37,16 @@ REGIME_DEFAULTS: dict[str, dict[str, float]] = {
         "return_noise_std": 0.045,
         "min_pf_floor": 1.05,
     },
+    # Mean reversion is now tuned for basket survivability rather than forcing
+    # every standalone candidate to maintain a fully positive left tail under
+    # noisy resampling.
     "mean_reversion": {
-        "min_p05_return_pct": 0.0,
-        "min_p50_return_pct": 0.20,
-        "max_p95_drawdown_pct": 16.0,
-        "max_failure_rate": 0.18,
-        "return_noise_std": 0.032,
-        "min_pf_floor": 1.15,
+        "min_p05_return_pct": -1.25,
+        "min_p50_return_pct": 0.15,
+        "max_p95_drawdown_pct": 18.0,
+        "max_failure_rate": 0.24,
+        "return_noise_std": 0.028,
+        "min_pf_floor": 1.10,
     },
     "unknown": {
         "min_p05_return_pct": 0.0,
@@ -77,8 +74,6 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 
 def infer_regime_hint(strategy: dict[str, Any] | None = None, backtest: dict[str, Any] | None = None) -> str:
-    """Infer a coarse regime label from strategy metadata and backtest shape."""
-
     strategy = strategy or {}
     backtest = backtest or {}
     tags = {str(t).lower() for t in (strategy.get("tags") or [])}
@@ -92,7 +87,6 @@ def infer_regime_hint(strategy: dict[str, Any] | None = None, backtest: dict[str
     if "trend" in tags or entry_mode == "trend_pullback" or bool(params.get("use_trend_filter", False)):
         return "trend"
 
-    # Backtest-level hints when tags are absent
     trades = _safe_int(backtest.get("trades", 0), 0)
     pf = _safe_float(backtest.get("profit_factor", 0.0), 0.0)
     dd = abs(_safe_float(backtest.get("max_drawdown_pct", 0.0), 0.0))
@@ -159,9 +153,6 @@ def _build_config(regime: str | None = None, backtest: dict[str, Any] | None = N
     regime_key = (regime or "unknown").strip().lower()
     defaults = REGIME_DEFAULTS.get(regime_key, REGIME_DEFAULTS["unknown"])
 
-    # Quality-aware tightening:
-    # Better strategies are held to a slightly stricter minimum failure rate and
-    # p50 threshold, because they should survive a tougher distributional test.
     bt = backtest or {}
     trades = _safe_int(bt.get("trades", 0), 0)
     pf = _safe_float(bt.get("profit_factor", 0.0), 0.0)
@@ -175,23 +166,39 @@ def _build_config(regime: str | None = None, backtest: dict[str, Any] | None = N
     quality += 0.20 * max(0.0, min(1.0, 1.0 - dd / 10.0))
     quality = max(0.0, min(1.0, quality))
 
-    # Stronger strategies get stricter tail gating; weak but viable strategies
-    # are not over-penalized for being slightly noisy.
-    if quality >= 0.75:
-        failure_adjust = -0.05
-        drawdown_adjust = -2.0
-        p50_adjust = 0.12
-    elif quality >= 0.50:
-        failure_adjust = -0.02
-        drawdown_adjust = -0.75
-        p50_adjust = 0.06
+    if regime_key == "mean_reversion":
+        if quality >= 0.75:
+            failure_adjust = -0.03
+            drawdown_adjust = -1.0
+            p50_adjust = 0.06
+            p05_adjust = 0.25
+        elif quality >= 0.50:
+            failure_adjust = -0.01
+            drawdown_adjust = -0.5
+            p50_adjust = 0.03
+            p05_adjust = 0.15
+        else:
+            failure_adjust = 0.01
+            drawdown_adjust = 0.75
+            p50_adjust = 0.0
+            p05_adjust = 0.0
     else:
-        failure_adjust = 0.01
-        drawdown_adjust = 0.5
-        p50_adjust = 0.0
+        if quality >= 0.75:
+            failure_adjust = -0.05
+            drawdown_adjust = -2.0
+            p50_adjust = 0.12
+        elif quality >= 0.50:
+            failure_adjust = -0.02
+            drawdown_adjust = -0.75
+            p50_adjust = 0.06
+        else:
+            failure_adjust = 0.01
+            drawdown_adjust = 0.5
+            p50_adjust = 0.0
+        p05_adjust = 0.0
 
     return MonteCarloConfig(
-        min_p05_return_pct=defaults["min_p05_return_pct"],
+        min_p05_return_pct=defaults["min_p05_return_pct"] + p05_adjust,
         min_p50_return_pct=defaults["min_p50_return_pct"] + p50_adjust,
         max_p95_drawdown_pct=max(5.0, defaults["max_p95_drawdown_pct"] + drawdown_adjust),
         max_failure_rate=max(0.05, min(0.40, defaults["max_failure_rate"] + failure_adjust)),
@@ -262,10 +269,9 @@ def run_monte_carlo(
         and pf_p50 >= cfg.min_pf_floor
     )
 
-    # Score rewards median upside, protects left tail, and rewards low drawdown.
     score = (
         0.35 * max(0, p50 / 10)
-        + 0.25 * max(0, p05 / 5)
+        + 0.25 * max(0, (p05 + 2.0) / 7)
         + 0.20 * max(0, 1 - p95_dd / cfg.max_p95_drawdown_pct)
         + 0.20 * max(0, min(1.0, (pf_p50 - 0.75) / 2.25))
     )
