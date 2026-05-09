@@ -70,7 +70,6 @@ def _extract_score_components(row: Mapping[str, Any]) -> dict[str, float]:
     perturb_score = _safe_float(perturb.get("score", 0.0), 0.0)
     perturb_passed = 1.0 if perturb.get("passed") else 0.0
 
-    # Normalize inputs into a common 0-1 band.
     return {
         "agent": max(0.0, min(1.0, agent_score)),
         "wf": max(0.0, min(1.0, wf_score)),
@@ -160,7 +159,6 @@ def _diversification_factor(
     if regime and regime_counts:
         factor *= 1.0 / math.sqrt(max(1, int(regime_counts.get(regime, 0)) + 1))
 
-    # If the portfolio already holds the same symbol/regime heavily, reduce the weight.
     if allocated_strategies:
         same_symbol = 0
         same_regime = 0
@@ -207,14 +205,19 @@ def _eligible(row: Mapping[str, Any], context: Mapping[str, Any] | None) -> bool
     wf = metrics.get("walk_forward") or {}
     mc = metrics.get("monte_carlo") or {}
     perturb = metrics.get("perturbation") or {}
+    cross_symbol = metrics.get("cross_symbol") or {}
 
+    # Hard gates: the allocator must never size capital for rows without full
+    # robustness evidence. Missing evidence is treated as a failure.
     if not bool(agent.get("passed", False)):
         return False
     if not bool(wf.get("passed", False)):
         return False
-    if mc and not bool(mc.get("passed", False)):
+    if not bool(mc.get("passed", False)):
         return False
-    if perturb and not bool(perturb.get("passed", False)):
+    if not bool(perturb.get("passed", False)):
+        return False
+    if not bool(cross_symbol.get("passed", False)):
         return False
 
     if context:
@@ -244,7 +247,6 @@ def _score_row(
         allocated_strategies=allocated_strategies,
     )
 
-    # Edge score emphasizes stability and distribution quality over raw PnL.
     edge_score = (
         0.18 * c["agent"]
         + 0.14 * c["wf"]
@@ -326,13 +328,11 @@ def _cap_weights(
         for w, i in zip(sub_weights, uncapped_idx):
             capitals[i] += remaining * w
 
-    # Convert back to total-capital-relative weights.
     total_allocated = sum(capitals)
     if total_allocated <= 0:
         return [0.0 for _ in strategies]
     weights = [c / total_allocated for c in capitals]
 
-    # Apply min/max weights while preserving normalization.
     weights = [max(constraints.min_weight, min(constraints.max_weight, w)) for w in weights]
     s = sum(weights) or 1.0
     return [w / s for w in weights]
@@ -374,7 +374,6 @@ def allocate_capital(
             scores.append(0.0)
             continue
 
-        metrics = row.get("metrics") or {}
         regime_name = row_context.get("regime") or row.get("regime") or row.get("regime_profile")
         if regime_name:
             row["regime"] = regime_name
