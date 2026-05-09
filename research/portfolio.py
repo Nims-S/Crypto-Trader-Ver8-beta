@@ -115,6 +115,30 @@ def _eligible(row: dict[str, Any]) -> bool:
     return True
 
 
+def _soft_fill_eligible(row: dict[str, Any]) -> bool:
+    status = str(row.get("status") or "").lower()
+    if status not in {"validated", "deployable", "live"}:
+        return False
+
+    metrics = row.get("metrics") or {}
+    agent = metrics.get("agent_score") or {}
+    wf = metrics.get("walk_forward") or {}
+    bt = metrics.get("backtest") or {}
+
+    if not bool(agent.get("passed", False)):
+        return False
+    if not bool(wf.get("passed", False)):
+        return False
+
+    return (
+        _safe_float(bt.get("return_pct", 0.0), 0.0) >= 0.0
+        and _safe_float(bt.get("profit_factor", 0.0), 0.0) >= 1.0
+        and _safe_float(bt.get("win_rate", 0.0), 0.0) >= 0.40
+        and abs(_safe_float(bt.get("max_drawdown_pct", 0.0), 0.0)) <= 15.0
+        and _safe_float(row.get("robustness_score", 0.0), 0.0) >= 0.10
+    )
+
+
 def _portfolio_score(row: dict[str, Any]) -> float:
     metrics = row.get("metrics") or {}
     agent = metrics.get("agent_score") or {}
@@ -406,6 +430,8 @@ def build_portfolio_summary(
     total_capital: float = _BASE_EQUITY,
     symbols: Sequence[str] | None = None,
     timeframes: Sequence[str] | None = None,
+    soft_fill: bool = False,
+    probationary_capital_fraction: float = 0.35,
 ) -> dict[str, Any]:
     selected = select_portfolio_candidates(
         strategies,
@@ -415,18 +441,73 @@ def build_portfolio_summary(
         symbols=symbols,
         timeframes=timeframes,
     )
+
+    mode = "strict"
+    if not selected and soft_fill:
+        mode = "soft_fill"
+        selected = []
+        soft_candidates: list[PortfolioCandidate] = []
+        for row in strategies:
+            if not _strategy_matches_filters(row, symbols=symbols, timeframes=timeframes):
+                continue
+            if not _soft_fill_eligible(row):
+                continue
+            row_regime = _regime_from_row(row)
+            if regime and regime not in {"all", "any"} and row_regime != regime and regime != "mean_reversion":
+                continue
+            symbol, timeframe = _market_pair(row)
+            raw_score = _portfolio_score(row)
+            soft_candidates.append(
+                PortfolioCandidate(
+                    strategy_id=str(row.get("strategy_id") or ""),
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    regime=row_regime,
+                    score=raw_score,
+                    raw_score=raw_score,
+                    row=dict(row),
+                )
+            )
+
+        if soft_candidates:
+            remaining = list(soft_candidates)
+            used_markets: set[tuple[str, str]] = set()
+            limit_soft = max(2, min(limit, len(remaining)))
+            while remaining and len(selected) < limit_soft:
+                best_index = None
+                best_adjusted = 0.0
+                best_penalty = 0.0
+                for idx, candidate in enumerate(remaining):
+                    market_key = (candidate.symbol.lower(), candidate.timeframe.lower())
+                    if unique_markets and market_key in used_markets:
+                        continue
+                    penalty = _correlation_penalty(candidate.row, [c.row for c in selected])
+                    adjusted = max(0.0, candidate.raw_score - penalty * 0.75)
+                    if best_index is None or adjusted > best_adjusted:
+                        best_index = idx
+                        best_adjusted = adjusted
+                        best_penalty = penalty
+                if best_index is None or best_adjusted <= 0.0:
+                    break
+                candidate = remaining.pop(best_index)
+                selected.append(replace(candidate, score=best_adjusted, correlation_penalty=best_penalty))
+                used_markets.add((candidate.symbol.lower(), candidate.timeframe.lower()))
+
     if not selected:
         return {
             "regime": regime,
+            "mode": mode,
             "summary": {"passed": False, "reason": "no_eligible_strategies"},
             "selected": [],
             "curve": [],
         }
 
     weights = _normalize_weights([c.score for c in selected], len(selected))
-    evaluation = evaluate_portfolio_combination([c.row for c in selected], weights=weights, total_capital=total_capital)
+    capital = total_capital * (probationary_capital_fraction if mode == "soft_fill" else 1.0)
+    evaluation = evaluate_portfolio_combination([c.row for c in selected], weights=weights, total_capital=capital)
     portfolio = {
         "regime": regime,
+        "mode": mode,
         "selected": [
             {
                 "strategy_id": c.strategy_id,
@@ -441,5 +522,6 @@ def build_portfolio_summary(
         ],
         "summary": evaluation.summary,
         "curve": evaluation.curve,
+        "probationary_capital_fraction": probationary_capital_fraction if mode == "soft_fill" else 1.0,
     }
     return portfolio
