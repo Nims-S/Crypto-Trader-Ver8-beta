@@ -1,73 +1,52 @@
 {
   "active_allocations": {
     "evo_btc_usdt_1d_151070": {
-      "capital": 8000.0,
+      "capital": 0.0,
       "enabled": true,
       "mode": "paper",
       "regime": null,
-      "score": 0.7000736391322753,
+      "score": 0.0,
       "status": "unknown",
       "strategy_id": "evo_btc_usdt_1d_151070",
       "symbol": "BTC/USDT",
       "timeframe": "1d",
-      "weight": 1.0
+      "weight": 0.0
     }
   },
   "created_at": "2026-05-06T22:38:36.118166+00:00",
-  "deployments": 6,
+  "deployments": 8,
   "drift_events": 0,
   "latest_deployment": {
     "actions": [
       {
-        "capital": 8000.0,
+        "capital": 0.0,
         "enabled": true,
         "mode": "paper",
         "regime": null,
-        "score": 0.7000736391322753,
+        "score": 0.0,
         "status": "unknown",
         "strategy_id": "evo_btc_usdt_1d_151070",
         "symbol": "BTC/USDT",
         "timeframe": "1d",
-        "weight": 1.0
+        "weight": 0.0
       }
     ],
     "allocations": [
       {
-        "allocation_components": {
-          "diversification": 1.0,
-          "drift": 1.0,
-          "edge": 0.875092048915344,
-          "raw": {
-            "agent": 0.9482112500000001,
-            "bt_dd": 0.8600749999999999,
-            "bt_pf": 1.0,
-            "bt_return": 0.7260142857142856,
-            "bt_trades": 0.37037037037037035,
-            "bt_wr": 1.0,
-            "mc": 0.0,
-            "mc_passed": 0.0,
-            "perturb": 0.0,
-            "perturb_passed": 0.0,
-            "robustness": 0.943926,
-            "wf": 0.948997,
-            "wf_passed": 1.0
-          },
-          "regime_match": 0.8,
-          "score": 0.7000736391322753
-        },
-        "allocation_edge": 0.875092048915344,
-        "allocation_score": 0.7000736391322753,
-        "capital": 8000.0,
-        "regime": null,
-        "score": 0.7000736391322753,
+        "allocation_components": {},
+        "allocation_edge": 0.0,
+        "allocation_score": 0.0,
+        "capital": 0.0,
+        "regime": "",
+        "score": 0.0,
         "status": "deployable",
         "strategy_id": "evo_btc_usdt_1d_151070",
         "symbol": "BTC/USDT",
         "timeframe": "1d",
-        "weight": 1.0
+        "weight": 0.0
       }
     ],
-    "created_at": "2026-05-08T23:50:28.784816+00:00",
+    "created_at": "2026-05-09T00:19:32.502830+00:00",
     "mode": "paper",
     "routes": [
       {
@@ -768,5 +747,5 @@
   },
   "latest_drift": null,
   "live_metric_strategies": 0,
-  "updated_at": "2026-05-08T23:50:28.787008+00:00"
+  "updated_at": "2026-05-09T00:19:32.505959+00:00"
 }
