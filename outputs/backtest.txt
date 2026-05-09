@@ -1,0 +1,74 @@
+{
+  "avg_trade_pnl": 21.157149,
+  "final_equity": 10121.46,
+  "htf_timeframe": "1w",
+  "ltf_timeframe": "1d",
+  "max_drawdown_pct": -2.7283,
+  "profit_factor": 1.6558,
+  "return_pct": 1.2146,
+  "symbol": "BTC/USDT",
+  "trades": 6,
+  "trades_detail": [
+    {
+      "entry_price": 24231.225592,
+      "exit_price": 29066.885963,
+      "pnl": 118.703624,
+      "qty": 0.0245771,
+      "result": "TP1",
+      "side": "LONG",
+      "strategy": "trend_following_v4",
+      "ts": "2023-03-14 00:00:00+00:00"
+    },
+    {
+      "entry_price": 24231.225592,
+      "exit_price": 27330.796738,
+      "pnl": 76.044122,
+      "qty": 0.0245771,
+      "result": "MAX_BARS",
+      "side": "LONG",
+      "strategy": "trend_following_v4",
+      "ts": "2023-03-14 00:00:00+00:00"
+    },
+    {
+      "entry_price": 41661.036322,
+      "exit_price": 48696.557496,
+      "pnl": 121.454801,
+      "qty": 0.01728702,
+      "result": "TP1",
+      "side": "LONG",
+      "strategy": "trend_following_v4",
+      "ts": "2023-12-13 00:00:00+00:00"
+    },
+    {
+      "entry_price": 41661.036322,
+      "exit_price": 41919.280807,
+      "pnl": 4.319345,
+      "qty": 0.01728702,
+      "result": "SL",
+      "side": "LONG",
+      "strategy": "trend_following_v4",
+      "ts": "2023-12-13 00:00:00+00:00"
+    },
+    {
+      "entry_price": 68308.61445,
+      "exit_price": 60172.968593,
+      "pnl": -98.652023,
+      "qty": 0.01210799,
+      "result": "SL",
+      "side": "LONG",
+      "strategy": "trend_following_v4",
+      "ts": "2024-03-21 00:00:00+00:00"
+    },
+    {
+      "entry_price": 89032.194647,
+      "exit_price": 84771.941966,
+      "pnl": -94.926973,
+      "qty": 0.02219368,
+      "result": "SL",
+      "side": "LONG",
+      "strategy": "mean_reversion_v4",
+      "ts": "2025-02-26 00:00:00+00:00"
+    }
+  ],
+  "win_rate": 0.667
+}

@@ -1,0 +1,182 @@
+{
+  "curve": [
+    {
+      "drawdown_pct": 0.0,
+      "equity": 3500.0,
+      "event": "start",
+      "ts": null
+    },
+    {
+      "drawdown_pct": -0.958181,
+      "equity": 3466.463677,
+      "pnl": -33.536323,
+      "regime": "mean_reversion",
+      "result": "SL",
+      "strategy_id": "evo_btc_usdt_1d_151070",
+      "symbol": "BTC/USDT",
+      "timeframe": "1d",
+      "ts": "2025-02-03T00:00:00+00:00"
+    },
+    {
+      "drawdown_pct": -1.879129,
+      "equity": 3434.230477,
+      "pnl": -32.233201,
+      "regime": "mean_reversion",
+      "result": "SL",
+      "strategy_id": "evo_btc_usdt_1d_151070",
+      "symbol": "BTC/USDT",
+      "timeframe": "1d",
+      "ts": "2025-02-26T00:00:00+00:00"
+    },
+    {
+      "drawdown_pct": -0.920584,
+      "equity": 3467.77956,
+      "pnl": 33.549083,
+      "regime": "mean_reversion",
+      "result": "TP1",
+      "strategy_id": "evo_btc_usdt_1d_151070",
+      "symbol": "BTC/USDT",
+      "timeframe": "1d",
+      "ts": "2025-04-07T00:00:00+00:00"
+    },
+    {
+      "drawdown_pct": 0.0,
+      "equity": 3501.328643,
+      "pnl": 33.549083,
+      "regime": "mean_reversion",
+      "result": "TP2",
+      "strategy_id": "evo_btc_usdt_1d_151070",
+      "symbol": "BTC/USDT",
+      "timeframe": "1d",
+      "ts": "2025-04-07T00:00:00+00:00"
+    },
+    {
+      "drawdown_pct": 0.0,
+      "equity": 3535.569026,
+      "pnl": 34.240383,
+      "regime": "mean_reversion",
+      "result": "TP1",
+      "strategy_id": "evo_btc_usdt_1d_151070",
+      "symbol": "BTC/USDT",
+      "timeframe": "1d",
+      "ts": "2025-06-06T00:00:00+00:00"
+    },
+    {
+      "drawdown_pct": 0.0,
+      "equity": 3569.809409,
+      "pnl": 34.240383,
+      "regime": "mean_reversion",
+      "result": "TP2",
+      "strategy_id": "evo_btc_usdt_1d_151070",
+      "symbol": "BTC/USDT",
+      "timeframe": "1d",
+      "ts": "2025-06-06T00:00:00+00:00"
+    },
+    {
+      "drawdown_pct": 0.0,
+      "equity": 3604.371948,
+      "pnl": 34.562539,
+      "regime": "mean_reversion",
+      "result": "TP1",
+      "strategy_id": "evo_btc_usdt_1d_151070",
+      "symbol": "BTC/USDT",
+      "timeframe": "1d",
+      "ts": "2025-06-22T00:00:00+00:00"
+    },
+    {
+      "drawdown_pct": 0.0,
+      "equity": 3638.934487,
+      "pnl": 34.562539,
+      "regime": "mean_reversion",
+      "result": "TP2",
+      "strategy_id": "evo_btc_usdt_1d_151070",
+      "symbol": "BTC/USDT",
+      "timeframe": "1d",
+      "ts": "2025-06-22T00:00:00+00:00"
+    },
+    {
+      "drawdown_pct": 0.0,
+      "equity": 3672.902364,
+      "pnl": 33.967877,
+      "regime": "mean_reversion",
+      "result": "TP1",
+      "strategy_id": "evo_btc_usdt_1d_151070",
+      "symbol": "BTC/USDT",
+      "timeframe": "1d",
+      "ts": "2025-08-01T00:00:00+00:00"
+    },
+    {
+      "drawdown_pct": 0.0,
+      "equity": 3706.870241,
+      "pnl": 33.967877,
+      "regime": "mean_reversion",
+      "result": "TP2",
+      "strategy_id": "evo_btc_usdt_1d_151070",
+      "symbol": "BTC/USDT",
+      "timeframe": "1d",
+      "ts": "2025-08-01T00:00:00+00:00"
+    },
+    {
+      "drawdown_pct": 0.0,
+      "equity": 3735.819489,
+      "pnl": 28.949249,
+      "regime": "mean_reversion",
+      "result": "TP1",
+      "strategy_id": "evo_btc_usdt_1d_151070",
+      "symbol": "BTC/USDT",
+      "timeframe": "1d",
+      "ts": "2025-09-26T00:00:00+00:00"
+    },
+    {
+      "drawdown_pct": 0.0,
+      "equity": 3764.768738,
+      "pnl": 28.949249,
+      "regime": "mean_reversion",
+      "result": "TP2",
+      "strategy_id": "evo_btc_usdt_1d_151070",
+      "symbol": "BTC/USDT",
+      "timeframe": "1d",
+      "ts": "2025-09-26T00:00:00+00:00"
+    },
+    {
+      "drawdown_pct": 0.0,
+      "equity": 3791.470824,
+      "pnl": 26.702087,
+      "regime": "mean_reversion",
+      "result": "MAX_BARS",
+      "strategy_id": "evo_btc_usdt_1d_151070",
+      "symbol": "BTC/USDT",
+      "timeframe": "1d",
+      "ts": "2025-12-16T00:00:00+00:00"
+    }
+  ],
+  "mode": "soft_fill",
+  "probationary_capital_fraction": 0.35,
+  "regime": "mean_reversion",
+  "selected": [
+    {
+      "correlation_penalty": 0.0,
+      "raw_score": 0.818145,
+      "regime": "mean_reversion",
+      "score": 0.818145,
+      "strategy_id": "evo_btc_usdt_1d_151070",
+      "symbol": "BTC/USDT",
+      "timeframe": "1d"
+    }
+  ],
+  "summary": {
+    "final_equity": 3791.470824,
+    "gross_loss": 65.769523,
+    "gross_profit": 357.240348,
+    "max_drawdown_pct": -1.879129,
+    "passed": true,
+    "profit_factor": 5.4317,
+    "return_pct": 8.327738,
+    "selected_count": 1,
+    "total_trades": 13,
+    "weights": [
+      1.0
+    ],
+    "win_rate": 0.846154
+  }
+}
