@@ -125,6 +125,10 @@ def _parent_budget(regime: str, parent_limits: dict[str, int] | None) -> int:
     return max(1, int(defaults.get(regime, 2)))
 
 
+def _fallback_parent_ids(parents: list[dict[str, Any]], limit: int) -> list[str]:
+    return [str(p.get("strategy_id") or p.get("id") or "") for p in parents[: max(1, limit)]]
+
+
 def build_regime_plans(
     parents: list[dict[str, Any]],
     *,
@@ -137,10 +141,18 @@ def build_regime_plans(
 
     for regime in REGIME_ORDER:
         bucket = clusters.get(regime) or []
-        if not bucket:
-            continue
         limit = _parent_budget(regime, parent_limits)
         parent_ids = [str(p.get("strategy_id") or p.get("id") or "") for p in bucket[:limit]]
+
+        # If the bucket is empty, still emit a mean-reversion plan seeded from
+        # the broader parent pool so the search can evolve MR variants instead of
+        # stopping at a trend-only universe.
+        if not parent_ids and regime == "mean_reversion" and parents:
+            parent_ids = _fallback_parent_ids(parents, limit)
+
+        if not parent_ids:
+            continue
+
         plans.append(
             RegimePlan(
                 regime=regime,
@@ -148,6 +160,17 @@ def build_regime_plans(
                 directives=regime_directives(regime, symbol),
                 parent_ids=parent_ids,
                 tags=[symbol, timeframe, regime],
+            )
+        )
+
+    if not plans and parents:
+        plans.append(
+            RegimePlan(
+                regime="mean_reversion",
+                objective=regime_objective("mean_reversion", symbol),
+                directives=regime_directives("mean_reversion", symbol),
+                parent_ids=_fallback_parent_ids(parents, _parent_budget("mean_reversion", parent_limits)),
+                tags=[symbol, timeframe, "mean_reversion"],
             )
         )
 
