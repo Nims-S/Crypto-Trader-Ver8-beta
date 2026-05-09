@@ -136,3 +136,4 @@ strategy/signals/__pycache__/breakout.cpython-314.pyc
 strategy/signals/__pycache__/mean_reversion.cpython-314.pyc
 strategy/signals/__pycache__/trend.cpython-314.pyc
 .strategy_store.json
+.live_state.json
