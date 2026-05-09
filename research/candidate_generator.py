@@ -178,24 +178,20 @@ def _apply_safety_constraints(params: dict, objective: str, symbol: str) -> dict
     p = dict(params or {})
     mode = str(p.get("entry_mode") or "").strip().lower()
 
-    # normalize mode names so the router can consume them consistently
     if mode in {"trend", "trend_following"}:
         p["entry_mode"] = "trend_pullback"
     elif mode not in {"trend_pullback", "breakout", "mean_reversion"}:
         p["entry_mode"] = "trend_pullback" if symbol.startswith("BTC") else "breakout"
 
-    # risk bounds
     p["stop_atr_mult"] = _clamp(_safe_float(p.get("stop_atr_mult", 2.0), 2.0), 1.2, 3.5)
     p["tp1_rr"] = _clamp(_safe_float(p.get("tp1_rr", 2.2), 2.2), 1.4, 4.5)
     p["tp2_rr"] = _clamp(_safe_float(p.get("tp2_rr", max(p["tp1_rr"] + 0.8, 3.2)), 3.2), p["tp1_rr"] + 0.5, 7.0)
 
-    # trade density floor; keep the system from over-filtering itself into no-trade regimes
     cd_lo, cd_hi = (6, 18) if objective == "density" else (8, 28)
     p["cooldown_bars"] = int(_clamp(int(_safe_float(p.get("cooldown_bars", 18), 18)), cd_lo, cd_hi))
     p["pullback_bars"] = int(_clamp(int(_safe_float(p.get("pullback_bars", 1), 1)), 1, 4))
     p["pullback_lookback"] = int(_clamp(int(_safe_float(p.get("pullback_lookback", 3), 3)), 2, 6))
 
-    # avoid over-restrictive filters
     adx_hi = 24.0 if objective == "density" else 30.0
     bb_hi = 0.45 if objective == "density" else 0.60
     atr_hi = 0.40 if objective == "density" else 0.60
@@ -373,21 +369,70 @@ def _mutate_breakout_params(rng: random.Random, params: dict) -> dict:
 def _mutate_mean_reversion_params(rng: random.Random, params: dict) -> dict:
     p = copy.deepcopy(params)
     p["entry_mode"] = "mean_reversion"
-    p.setdefault("min_bb_rank", 0.30)
-    p.setdefault("rsi_max", 32.0)
-    p.setdefault("stop_atr_mult", 1.6)
-    p.setdefault("tp1_rr", 1.8)
-    p.setdefault("cooldown_bars", 18)
-    p.setdefault("max_bars_override", 36)
-
-    p["min_bb_rank"] = _clamp(_safe_float(p.get("min_bb_rank", 0.30), 0.30) + rng.uniform(-0.05, 0.04), 0.06, 0.40)
-    p["rsi_max"] = _clamp(_safe_float(p.get("rsi_max", 32.0), 32.0) + rng.uniform(-3.0, 2.0), 20.0, 40.0)
-    p["stop_atr_mult"] = _clamp(_safe_float(p.get("stop_atr_mult", 1.6), 1.6) + rng.uniform(-0.2, 0.3), 1.0, 2.3)
-    p["tp1_rr"] = _clamp(_safe_float(p.get("tp1_rr", 1.8), 1.8) + rng.uniform(-0.2, 0.25), 1.2, 3.0)
-    p["cooldown_bars"] = int(_clamp(int(_safe_float(p.get("cooldown_bars", 18), 18)) + rng.choice([-4, -2, 0, 2, 4]), 6, 24))
+    p["use_htf_filter"] = bool(p.get("use_htf_filter", True))
+    p["use_reclaim_filter"] = True
+    p["use_structure_filter"] = bool(p.get("use_structure_filter", False)) or rng.random() < 0.35
+    p["use_volume_filter"] = bool(p.get("use_volume_filter", False))
+    p["min_bb_rank"] = _clamp(_safe_float(p.get("min_bb_rank", 0.30), 0.30) + rng.uniform(-0.04, 0.03), 0.06, 0.40)
+    p["rsi_max"] = _clamp(_safe_float(p.get("rsi_max", 32.0), 32.0) + rng.uniform(-4.0, 2.0), 18.0, 42.0)
+    p["stop_atr_mult"] = _clamp(_safe_float(p.get("stop_atr_mult", 1.6), 1.6) + rng.uniform(-0.15, 0.25), 1.0, 2.2)
+    p["tp1_rr"] = _clamp(_safe_float(p.get("tp1_rr", 1.8), 1.8) + rng.uniform(-0.15, 0.20), 1.2, 2.8)
+    p["cooldown_bars"] = int(_clamp(int(_safe_float(p.get("cooldown_bars", 18), 18)) + rng.choice([-4, -2, 0, 2, 4]), 6, 22))
     p["max_bars_override"] = int(_clamp(int(_safe_float(p.get("max_bars_override", 36), 36)) + rng.choice([-6, 0, 6, 12]), 18, 60))
-    p["confidence"] = _clamp(_safe_float(p.get("confidence", 0.65), 0.65) + rng.uniform(-0.05, 0.05), 0.45, 0.85)
+    p["confidence"] = _clamp(_safe_float(p.get("confidence", 0.65), 0.65) + rng.uniform(-0.04, 0.05), 0.45, 0.88)
     p["size_multiplier"] = _clamp(_safe_float(p.get("size_multiplier", 0.60), 0.60) + rng.uniform(-0.10, 0.08), 0.25, 0.85)
+    p["tp2_rr"] = _clamp(_safe_float(p.get("tp2_rr", max(p["tp1_rr"] + 0.8, 2.8)), 2.8) + rng.uniform(-0.25, 0.35), p["tp1_rr"] + 0.5, 4.5)
+    return p
+
+
+def _mutate_mean_reversion_vwap_params(rng: random.Random, params: dict) -> dict:
+    p = _mutate_mean_reversion_params(rng, params)
+    p["entry_mode"] = "mean_reversion"
+    p["use_volume_filter"] = True
+    p["use_htf_filter"] = True
+    p["use_structure_filter"] = True
+    p["use_reclaim_filter"] = True
+    p["min_bb_rank"] = _clamp(_safe_float(p.get("min_bb_rank", 0.24), 0.24) + rng.uniform(-0.03, 0.02), 0.05, 0.35)
+    p["rsi_max"] = _clamp(_safe_float(p.get("rsi_max", 30.0), 30.0) + rng.uniform(-2.5, 1.5), 18.0, 38.0)
+    p["volume_multiplier"] = _clamp(_safe_float(p.get("volume_multiplier", 1.02), 1.02) + rng.uniform(-0.08, 0.10), 0.85, 1.25)
+    p["cooldown_bars"] = int(_clamp(int(_safe_float(p.get("cooldown_bars", 16), 16)) + rng.choice([-2, 0, 2, 4]), 5, 18))
+    p["tp1_rr"] = _clamp(_safe_float(p.get("tp1_rr", 1.7), 1.7) + rng.uniform(-0.10, 0.15), 1.1, 2.4)
+    p["tp2_rr"] = _clamp(max(_safe_float(p.get("tp2_rr", 2.6), 2.6), p["tp1_rr"] + 0.6) + rng.uniform(-0.20, 0.25), 2.0, 4.2)
+    p["size_multiplier"] = _clamp(_safe_float(p.get("size_multiplier", 0.55), 0.55) + rng.uniform(-0.08, 0.06), 0.20, 0.75)
+    return p
+
+
+def _mutate_mean_reversion_extreme_params(rng: random.Random, params: dict) -> dict:
+    p = _mutate_mean_reversion_params(rng, params)
+    p["entry_mode"] = "mean_reversion"
+    p["use_volume_filter"] = False
+    p["use_htf_filter"] = True
+    p["use_structure_filter"] = False
+    p["use_reclaim_filter"] = True
+    p["min_bb_rank"] = _clamp(_safe_float(p.get("min_bb_rank", 0.30), 0.30) + rng.uniform(0.00, 0.03), 0.08, 0.42)
+    p["rsi_max"] = _clamp(_safe_float(p.get("rsi_max", 26.0), 26.0) + rng.uniform(-3.0, 1.0), 16.0, 35.0)
+    p["stop_atr_mult"] = _clamp(_safe_float(p.get("stop_atr_mult", 1.55), 1.55) + rng.uniform(-0.20, 0.15), 1.0, 2.0)
+    p["tp1_rr"] = _clamp(_safe_float(p.get("tp1_rr", 1.6), 1.6) + rng.uniform(-0.10, 0.20), 1.1, 2.2)
+    p["tp2_rr"] = _clamp(max(_safe_float(p.get("tp2_rr", 2.4), 2.4), p["tp1_rr"] + 0.7) + rng.uniform(-0.15, 0.20), 2.0, 4.0)
+    p["cooldown_bars"] = int(_clamp(int(_safe_float(p.get("cooldown_bars", 14), 14)) + rng.choice([-4, -2, 0, 2]), 4, 16))
+    p["max_bars_override"] = int(_clamp(int(_safe_float(p.get("max_bars_override", 28), 28)) + rng.choice([-4, 0, 4, 8]), 14, 48))
+    p["size_multiplier"] = _clamp(_safe_float(p.get("size_multiplier", 0.50), 0.50) + rng.uniform(-0.08, 0.05), 0.20, 0.70)
+    return p
+
+
+def _mutate_volatility_squeeze_breakout_params(rng: random.Random, params: dict) -> dict:
+    p = _mutate_breakout_params(rng, params)
+    p["entry_mode"] = "breakout"
+    p["use_breakout_filter"] = True
+    p["use_volume_filter"] = True
+    p["use_htf_filter"] = True
+    p["use_structure_filter"] = False
+    p["min_bb_rank"] = _clamp(_safe_float(p.get("min_bb_rank", 0.22), 0.22) + rng.uniform(-0.03, 0.03), 0.08, 0.35)
+    p["min_atr_rank"] = _clamp(_safe_float(p.get("min_atr_rank", 0.18), 0.18) + rng.uniform(-0.03, 0.03), 0.08, 0.35)
+    p["volume_multiplier"] = _clamp(_safe_float(p.get("volume_multiplier", 1.0), 1.0) + rng.uniform(0.00, 0.12), 0.95, 1.35)
+    p["cooldown_bars"] = int(_clamp(int(_safe_float(p.get("cooldown_bars", 20), 20)) + rng.choice([-4, -2, 0, 2]), 6, 26))
+    p["tp1_rr"] = _clamp(_safe_float(p.get("tp1_rr", 2.1), 2.1) + rng.uniform(-0.15, 0.20), 1.4, 3.0)
+    p["tp2_rr"] = _clamp(max(_safe_float(p.get("tp2_rr", 3.3), 3.3), p["tp1_rr"] + 0.7) + rng.uniform(-0.25, 0.35), 2.2, 5.2)
     return p
 
 
@@ -430,11 +475,18 @@ def mutate_parent(parent, symbol, timeframe, n_children=4, seed=None, feedback=N
     directives = (feedback or {}).get("mutation_directives") or {}
     base_entry_mode = str(base_params.get("entry_mode") or directives.get("entry_mode") or "trend_pullback")
 
-    oversample = max(n_children * 3, n_children + 2)
+    # Oversample more aggressively for mean-reversion so the search keeps a
+    # larger survivor set after strict gates are applied.
+    oversample = max(n_children * (5 if objective in {"density", "profit_factor"} else 3), n_children + 4)
     raw_params: List[dict] = []
 
-    # Baseline anchor to keep evolution from drifting into dead zones.
     raw_params.append(_apply_safety_constraints(_baseline_params(symbol, objective), objective, symbol))
+
+    # Add a small family of purpose-built templates so we can test a couple of
+    # new mean-reversion and volatility archetypes alongside the existing pool.
+    raw_params.append(_apply_safety_constraints(_mutate_mean_reversion_vwap_params(rng, _baseline_params(symbol, "profit_factor")), "profit_factor", symbol))
+    raw_params.append(_apply_safety_constraints(_mutate_mean_reversion_extreme_params(rng, _baseline_params(symbol, "stability")), "stability", symbol))
+    raw_params.append(_apply_safety_constraints(_mutate_volatility_squeeze_breakout_params(rng, _baseline_params(symbol, "density")), "density", symbol))
 
     if llm_client:
         llm_sets = _llm_mutations(base_params, feedback, oversample, llm_client)
@@ -445,16 +497,26 @@ def mutate_parent(parent, symbol, timeframe, n_children=4, seed=None, feedback=N
         params = dict(base_params)
         params = _apply_directives(params, directives, symbol)
 
-        mode = base_entry_mode
-        if rng.random() < 0.60:
-            mode = rng.choice(["trend_pullback", "breakout", "mean_reversion"])
+        if objective in {"density", "profit_factor"}:
+            mode = rng.choices(
+                ["mean_reversion", "breakout", "trend_pullback"],
+                weights=[0.60, 0.25, 0.15],
+                k=1,
+            )[0]
+        else:
+            mode = base_entry_mode
+            if rng.random() < 0.60:
+                mode = rng.choice(["trend_pullback", "breakout", "mean_reversion"])
 
         if mode == "trend_pullback":
             params = _mutate_trend_params(rng, params)
         elif mode == "breakout":
-            params = _mutate_breakout_params(rng, params)
+            params = _mutate_volatility_squeeze_breakout_params(rng, params)
         else:
-            params = _mutate_mean_reversion_params(rng, params)
+            if rng.random() < 0.55:
+                params = _mutate_mean_reversion_vwap_params(rng, params)
+            else:
+                params = _mutate_mean_reversion_extreme_params(rng, params)
 
         raw_params.append(_apply_safety_constraints(params, objective, symbol))
 
@@ -468,8 +530,9 @@ def mutate_parent(parent, symbol, timeframe, n_children=4, seed=None, feedback=N
 
         if diversity_pool:
             too_close = False
+            threshold = 0.07 if str(params.get("entry_mode") or "") == "mean_reversion" else 0.10
             for p in diversity_pool:
-                if _distance(params, p.get("parameters", {})) < 0.10:
+                if _distance(params, p.get("parameters", {})) < threshold:
                     too_close = True
                     break
             if too_close:
@@ -487,6 +550,14 @@ def mutate_parent(parent, symbol, timeframe, n_children=4, seed=None, feedback=N
     candidates = []
     for _, params in selected:
         sid = f"evo_{symbol.replace('/', '_').lower()}_{timeframe}_{rng.randint(1,999999)}"
+        archetype = str(params.get("entry_mode") or "mixed")
+        if params.get("use_reclaim_filter") and params.get("use_volume_filter"):
+            archetype = f"mr_vwap_{archetype}"
+        elif params.get("use_reclaim_filter"):
+            archetype = f"mr_extreme_{archetype}"
+        elif params.get("use_breakout_filter"):
+            archetype = f"vol_squeeze_{archetype}"
+
         candidates.append(
             StrategyCandidate(
                 sid,
@@ -495,9 +566,9 @@ def mutate_parent(parent, symbol, timeframe, n_children=4, seed=None, feedback=N
                 params,
                 symbol,
                 timeframe,
-                [symbol, timeframe, "evo", params.get("entry_mode", "mixed")],
+                [symbol, timeframe, "evo", archetype],
                 "evolution",
-                notes=f"objective={objective}",
+                notes=f"objective={objective}; archetype={archetype}",
             )
         )
 
