@@ -373,6 +373,10 @@ def run_evolution_cycle(config: EvolutionConfig, *, cycle_id: str | None = None)
 
 def run_continuous_loop(config: EvolutionConfig, *, interval_seconds: int = 3600, cycles: int | None = None) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
-    for _ in range(cycles or 1):
+    total = max(1, int(cycles or 1))
+    delay = max(0, int(interval_seconds))
+    for idx in range(total):
         out.append(run_evolution_cycle(config))
+        if idx + 1 < total and delay > 0:
+            time.sleep(delay)
     return out
