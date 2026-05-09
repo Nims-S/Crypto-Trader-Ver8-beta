@@ -21,16 +21,17 @@ from research.feedback import build_feedback_summary
 from research.monte_carlo import infer_regime_hint, run_monte_carlo
 from research.portfolio import build_portfolio_summary
 from research.perturbation import run_perturbation
-from research.scoring import score_metrics
-from research.validation import build_walk_forward_folds, split_walk_forward_window, summarize_walk_forward_reports
 from research.regime_evolution import build_regime_plans
+from research.scoring import score_metrics
+from research.survivor_seeding import build_survivor_seed_parents
+from research.validation import build_walk_forward_folds, split_walk_forward_window, summarize_walk_forward_reports
 
 
 @dataclass(frozen=True)
 class EvolutionConfig:
-    symbols: tuple[str, ...] = ("BTC/USDT",)
-    timeframes: tuple[str, ...] = ("1d",)
-    validation_symbols: tuple[str, ...] = ("ETH/USDT",)
+    symbols: tuple[str, ...] = ("BTC/USDT", "ETH/USDT", "SOL/USDT")
+    timeframes: tuple[str, ...] = ("1d", "4h")
+    validation_symbols: tuple[str, ...] = ("BTC/USDT", "ETH/USDT", "SOL/USDT")
     start: str = "2024-01-01"
     end: str = "2025-01-01"
     folds: int = 3
@@ -192,15 +193,86 @@ def _portfolio_snapshot(*, regime: str = "mean_reversion", limit: int = 3, total
         limit=limit,
         unique_markets=True,
         total_capital=total_capital,
+        soft_fill=True,
+        probationary_capital_fraction=0.35,
     )
 
 
-def evaluate_candidate(*, candidate: Any, parent: dict[str, Any], symbol: str, timeframe: str, start: str, end: str, folds: int, allow_shorts: bool, use_cache: bool, mc_iterations: int = 300, validation_symbols: tuple[str, ...] = ("ETH/USDT",)) -> dict[str, Any]:
+def _dedupe_parents(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        sid = str(row.get("strategy_id") or row.get("id") or "")
+        if not sid or sid in seen:
+            continue
+        seen.add(sid)
+        out.append(row)
+    return out
+
+
+def _seeded_parents_for_plan(*, symbol: str, timeframe: str, plan: Any, parent_count: int) -> list[dict[str, Any]]:
+    return build_survivor_seed_parents(
+        symbol=symbol,
+        timeframe=timeframe,
+        regime=str(getattr(plan, "regime", "trend") or "trend"),
+        objective=str(getattr(plan, "objective", "balanced") or "balanced"),
+        count=max(2, int(parent_count)),
+        seed=_stable_seed(symbol, timeframe, getattr(plan, "regime", "trend"), getattr(plan, "objective", "balanced")),
+    )
+
+
+def _evaluate_candidate_safe(
+    *,
+    candidate: Any,
+    parent: dict[str, Any],
+    symbol: str,
+    timeframe: str,
+    start: str,
+    end: str,
+    folds: int,
+    allow_shorts: bool,
+    use_cache: bool,
+    mc_iterations: int,
+    validation_symbols: tuple[str, ...],
+) -> dict[str, Any]:
+    try:
+        return evaluate_candidate(
+            candidate=candidate,
+            parent=parent,
+            symbol=symbol,
+            timeframe=timeframe,
+            start=start,
+            end=end,
+            folds=folds,
+            allow_shorts=allow_shorts,
+            use_cache=use_cache,
+            mc_iterations=mc_iterations,
+            validation_symbols=validation_symbols,
+        )
+    except Exception as exc:
+        return {
+            "status": "candidate",
+            "passed": False,
+            "score": 0.0,
+            "regime": getattr(candidate, "regime", None) or infer_regime_hint({"parameters": getattr(candidate, "parameters", {}) or {}, "tags": getattr(candidate, "tags", [])}, {}),
+            "error": f"{type(exc).__name__}: {exc}",
+            "metrics": {
+                "backtest": {},
+                "agent_score": {"passed": False, "reasons": ["candidate_exception"], "score": 0.0},
+                "walk_forward": {"passed": False, "reasons": ["candidate_exception"], "score": 0.0},
+                "monte_carlo": {"passed": False, "reasons": ["candidate_exception"], "score": 0.0},
+                "perturbation": {"passed": False, "reasons": ["candidate_exception"], "score": 0.0},
+                "cross_symbol": {"passed": False, "reasons": ["candidate_exception"], "score": 0.0},
+            },
+        }
+
+
+def evaluate_candidate(*, candidate: Any, parent: dict[str, Any], symbol: str, timeframe: str, start: str, end: str, folds: int, allow_shorts: bool, use_cache: bool, mc_iterations: int = 300, validation_symbols: tuple[str, ...] = ("BTC/USDT", "ETH/USDT", "SOL/USDT")) -> dict[str, Any]:
     parameters = dict(getattr(candidate, "parameters", {}) or {})
 
     full = _evaluate_variant(symbol=symbol, timeframe=timeframe, start=start, end=end, parameters=parameters, allow_shorts=allow_shorts, use_cache=use_cache)
     if "error" in full:
-        return {"status": "candidate", "error": full["error"]}
+        return {"status": "candidate", "error": full["error"], "passed": False, "score": 0.0, "metrics": {"backtest": {}, "agent_score": {"passed": False, "reasons": [full["error"]], "score": 0.0}}}
 
     wf_reports = []
     for fold in build_walk_forward_folds(start, end, folds=max(1, folds)):
@@ -314,24 +386,46 @@ def run_evolution_cycle(config: EvolutionConfig, *, cycle_id: str | None = None)
             plan_feedback["mutation_directives"] = plan.directives
 
             selected_parents = [p for p in parents if (p.get("strategy_id") in plan.parent_ids)]
+            seeded_parents = _seeded_parents_for_plan(symbol=symbol, timeframe=timeframe, plan=plan, parent_count=len(selected_parents) or config.parents_per_pair)
+            selected_parents = _dedupe_parents(selected_parents + seeded_parents)
 
             if not selected_parents:
                 seed = seed_strategy(symbol, timeframe)
                 selected_parents = [{"strategy_id": seed.strategy_id, "parameters": seed.parameters}]
 
-            for parent in selected_parents:
-                candidates = mutate_parent(
-                    parent,
-                    symbol,
-                    timeframe,
-                    n_children=config.children_per_parent,
-                    seed=_stable_seed(symbol, timeframe, plan.regime),
-                    feedback=plan_feedback,
-                    diversity_pool=parents,
-                )
+            for parent in selected_parents[: max(1, config.parents_per_pair + 2)]:
+                try:
+                    candidates = mutate_parent(
+                        parent,
+                        symbol,
+                        timeframe,
+                        n_children=config.children_per_parent,
+                        seed=_stable_seed(symbol, timeframe, plan.regime),
+                        feedback=plan_feedback,
+                        diversity_pool=parents or seeded_parents,
+                    )
+                except Exception as exc:
+                    results.append(
+                        {
+                            "status": "candidate",
+                            "passed": False,
+                            "score": 0.0,
+                            "regime": plan.regime,
+                            "error": f"mutate_parent_failed: {type(exc).__name__}: {exc}",
+                            "metrics": {
+                                "backtest": {},
+                                "agent_score": {"passed": False, "reasons": ["mutation_failed"], "score": 0.0},
+                                "walk_forward": {"passed": False, "reasons": ["mutation_failed"], "score": 0.0},
+                                "monte_carlo": {"passed": False, "reasons": ["mutation_failed"], "score": 0.0},
+                                "perturbation": {"passed": False, "reasons": ["mutation_failed"], "score": 0.0},
+                                "cross_symbol": {"passed": False, "reasons": ["mutation_failed"], "score": 0.0},
+                            },
+                        }
+                    )
+                    continue
 
                 for c in candidates:
-                    report = evaluate_candidate(
+                    report = _evaluate_candidate_safe(
                         candidate=c,
                         parent=parent,
                         symbol=symbol,
