@@ -153,6 +153,26 @@ def _flatten_route(route: dict[str, Any]) -> dict[str, Any]:
     return flat
 
 
+def _acceptable_survivor_count(routes: list[dict[str, Any]]) -> int:
+    count = 0
+    for route in routes:
+        strategy = route.get("strategy") or {}
+        metrics = strategy.get("metrics") or {}
+        wf = metrics.get("walk_forward") or {}
+        mc = metrics.get("monte_carlo") or {}
+        perturb = metrics.get("perturbation") or {}
+        robustness = float(strategy.get("robustness_score", 0.0) or 0.0)
+
+        acceptable = (
+            bool(wf.get("passed", False))
+            and (bool(mc.get("passed", False)) or bool(perturb.get("passed", False)))
+            and robustness >= 0.50
+        )
+        if acceptable:
+            count += 1
+    return count
+
+
 def build_deployment_plan(
     *,
     symbols: list[str] | tuple[str, ...],
@@ -172,9 +192,51 @@ def build_deployment_plan(
 
     state = _load_state()
     routes = _pick_routes(symbol_list, timeframe_list, regimes=regimes, limit=limit)
+
+    acceptable_survivors = _acceptable_survivor_count(routes)
+    allow_probationary_soft_fill = acceptable_survivors >= 2
+
     context = _cap_context(routes, state)
     allocation_inputs = [_flatten_route(route) for route in routes]
     allocations = allocate_capital(allocation_inputs, float(total_capital or DEFAULT_TOTAL_CAPITAL), temperature=temperature, context=context)
+
+    non_zero_allocations = sum(1 for alloc in allocations if float(alloc.get("capital", 0.0) or 0.0) > 0.0)
+
+    if non_zero_allocations == 0 and allow_probationary_soft_fill:
+        probationary_capital = float(total_capital or DEFAULT_TOTAL_CAPITAL) * 0.20
+        fallback_weight = 1.0 / max(1, acceptable_survivors)
+
+        patched_allocations = []
+        survivor_seen = 0
+        for route, alloc in zip(routes, allocations):
+            strategy = route.get("strategy") or {}
+            metrics = strategy.get("metrics") or {}
+            wf = metrics.get("walk_forward") or {}
+            mc = metrics.get("monte_carlo") or {}
+            perturb = metrics.get("perturbation") or {}
+            robustness = float(strategy.get("robustness_score", 0.0) or 0.0)
+
+            acceptable = (
+                bool(wf.get("passed", False))
+                and (bool(mc.get("passed", False)) or bool(perturb.get("passed", False)))
+                and robustness >= 0.50
+            )
+
+            alloc = dict(alloc)
+            if acceptable:
+                survivor_seen += 1
+                alloc["capital"] = round(probationary_capital * fallback_weight, 6)
+                alloc["weight"] = round(fallback_weight, 6)
+                alloc["score"] = max(float(alloc.get("score", 0.0) or 0.0), robustness)
+                alloc["allocation_mode"] = "probationary_soft_fill"
+            else:
+                alloc["capital"] = 0.0
+                alloc["weight"] = 0.0
+                alloc["allocation_mode"] = "blocked"
+
+            patched_allocations.append(alloc)
+
+        allocations = patched_allocations
 
     actions: list[dict[str, Any]] = []
     for route, alloc in zip(routes, allocations):
@@ -191,6 +253,7 @@ def build_deployment_plan(
                 "capital": alloc.get("capital", 0.0),
                 "weight": alloc.get("weight", 0.0),
                 "score": alloc.get("score", 0.0),
+                "allocation_mode": alloc.get("allocation_mode", "strict"),
                 "mode": "paper" if paper else "live",
             }
         )
