@@ -40,6 +40,8 @@ def infer_parent_regime(parent: dict[str, Any]) -> str:
 def regime_objective(regime: str, symbol: str) -> str:
     regime = _safe_str(regime, "trend")
     if regime == "mean_reversion":
+        if symbol.startswith("ETH") or symbol.startswith("SOL"):
+            return "stability"
         return "profit_factor"
     if regime == "breakout":
         return "density"
@@ -95,8 +97,6 @@ def regime_directives(regime: str, symbol: str) -> dict[str, Any]:
                 "entry_mode": "mean_reversion",
                 "use_trend_filter": False,
                 "use_htf_filter": True,
-                "use_volume_filter": False,
-                "use_structure_filter": False,
                 "use_breakout_filter": False,
                 "use_reclaim_filter": True,
                 "cooldown_bars": 18,
@@ -106,6 +106,19 @@ def regime_directives(regime: str, symbol: str) -> dict[str, Any]:
                 "stop_atr_mult": 1.5,
             }
         )
+        if symbol.startswith("ETH") or symbol.startswith("SOL"):
+            base.update(
+                {
+                    "use_volume_filter": True,
+                    "use_structure_filter": True,
+                    "cooldown_bars": 14 if symbol.startswith("ETH") else 12,
+                    "max_bars_override": 26 if symbol.startswith("ETH") else 22,
+                    "tp1_rr": 1.55 if symbol.startswith("ETH") else 1.45,
+                    "tp2_rr": 2.25 if symbol.startswith("ETH") else 2.05,
+                    "stop_atr_mult": 1.4 if symbol.startswith("ETH") else 1.32,
+                    "prefer_trend_pullback": False,
+                }
+            )
     return base
 
 
@@ -142,11 +155,10 @@ def build_regime_plans(
     for regime in REGIME_ORDER:
         bucket = clusters.get(regime) or []
         limit = _parent_budget(regime, parent_limits)
+        if regime == "mean_reversion" and (symbol.startswith("ETH") or symbol.startswith("SOL")):
+            limit = max(limit, 7)
         parent_ids = [str(p.get("strategy_id") or p.get("id") or "") for p in bucket[:limit]]
 
-        # If the bucket is empty, still emit a mean-reversion plan seeded from
-        # the broader parent pool so the search can evolve MR variants instead of
-        # stopping at a trend-only universe.
         if not parent_ids and regime == "mean_reversion" and parents:
             parent_ids = _fallback_parent_ids(parents, limit)
 
