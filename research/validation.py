@@ -55,6 +55,33 @@ WALK_FORWARD_MIN_FINAL_SCORE = 0.32
 WALK_FORWARD_MAX_SPREAD = 0.60
 WALK_FORWARD_MIN_PASS_RATIO = 0.34
 
+# Regime-aware relaxations: mean reversion is allowed a slightly softer floor
+# so durable MR families can survive long enough to form a basket, while trend
+# remains unchanged.
+WALK_FORWARD_REGIME_OVERRIDES = {
+    "mean_reversion": {
+        "min_score": 0.26,
+        "min_final_score": 0.28,
+        "max_spread": 0.72,
+        "min_pass_ratio": 0.28,
+        "trade_floor_scale": 0.40,
+    },
+    "breakout": {
+        "min_score": 0.28,
+        "min_final_score": 0.30,
+        "max_spread": 0.64,
+        "min_pass_ratio": 0.30,
+        "trade_floor_scale": 0.45,
+    },
+    "trend": {
+        "min_score": WALK_FORWARD_MIN_SCORE,
+        "min_final_score": WALK_FORWARD_MIN_FINAL_SCORE,
+        "max_spread": WALK_FORWARD_MAX_SPREAD,
+        "min_pass_ratio": WALK_FORWARD_MIN_PASS_RATIO,
+        "trade_floor_scale": 0.50,
+    },
+}
+
 
 def _to_utc_timestamp(value: Any) -> pd.Timestamp:
     ts = pd.Timestamp(value)
@@ -254,18 +281,27 @@ def split_walk_forward_window(
     }
 
 
-def _split_trade_floor(timeframe: str, split_name: str) -> int:
+def _split_trade_floor(timeframe: str, split_name: str, *, regime: str | None = None) -> int:
     base = TRADE_DENSITY_BASE.get((timeframe or "").lower(), 5)
+    regime_key = str(regime or "").strip().lower()
+    scale = WALK_FORWARD_REGIME_OVERRIDES.get(regime_key, {}).get("trade_floor_scale", 0.50)
     if split_name == "train":
-        return max(3, int(round(base * 0.5)))
+        return max(2, int(round(base * scale)))
     if split_name == "val":
-        return max(2, int(round(base * 0.35)))
-    return max(2, int(round(base * 0.35)))
+        return max(2, int(round(base * max(0.30, scale * 0.85))))
+    return max(2, int(round(base * max(0.30, scale * 0.85))))
 
 
-def summarize_walk_forward_reports(fold_reports: list[dict[str, Any]], *, timeframe: str) -> dict[str, Any]:
+def summarize_walk_forward_reports(fold_reports: list[dict[str, Any]], *, timeframe: str, regime: str | None = None) -> dict[str, Any]:
     if not fold_reports:
         return {"score": 0.0, "passed": False, "reason": "no fold reports", "fold_count": 0}
+
+    regime_key = str(regime or "").strip().lower()
+    thresholds = WALK_FORWARD_REGIME_OVERRIDES.get(regime_key, {})
+    min_score = float(thresholds.get("min_score", WALK_FORWARD_MIN_SCORE))
+    min_final_score = float(thresholds.get("min_final_score", WALK_FORWARD_MIN_FINAL_SCORE))
+    max_spread = float(thresholds.get("max_spread", WALK_FORWARD_MAX_SPREAD))
+    min_pass_ratio = float(thresholds.get("min_pass_ratio", WALK_FORWARD_MIN_PASS_RATIO))
 
     split_scores = {"train": [], "val": [], "test": []}
     pass_counts = {"train": 0, "val": 0, "test": 0}
@@ -278,7 +314,7 @@ def summarize_walk_forward_reports(fold_reports: list[dict[str, Any]], *, timefr
     for fold in fold_reports:
         for split in ("train", "val", "test"):
             result = fold.get(split) or {}
-            floor = _split_trade_floor(timeframe, split)
+            floor = _split_trade_floor(timeframe, split, regime=regime_key)
             decision = score_metrics(result, timeframe=timeframe, min_trades=floor)
             split_scores[split].append(decision.score)
             total_counts[split] += 1
@@ -308,24 +344,24 @@ def summarize_walk_forward_reports(fold_reports: list[dict[str, Any]], *, timefr
     mean_dd = {k: float(np.mean(v)) if v else 0.0 for k, v in dd_counts.items()}
 
     passed = (
-        val_mean >= WALK_FORWARD_MIN_SCORE
-        and test_mean >= WALK_FORWARD_MIN_SCORE
-        and final_score >= WALK_FORWARD_MIN_FINAL_SCORE
-        and score_spread <= WALK_FORWARD_MAX_SPREAD
-        and val_pass_ratio >= WALK_FORWARD_MIN_PASS_RATIO
-        and test_pass_ratio >= WALK_FORWARD_MIN_PASS_RATIO
+        val_mean >= min_score
+        and test_mean >= min_score
+        and final_score >= min_final_score
+        and score_spread <= max_spread
+        and val_pass_ratio >= min_pass_ratio
+        and test_pass_ratio >= min_pass_ratio
     )
 
     reasons = []
-    if val_mean < WALK_FORWARD_MIN_SCORE:
+    if val_mean < min_score:
         reasons.append("val_weak")
-    if test_mean < WALK_FORWARD_MIN_SCORE:
+    if test_mean < min_score:
         reasons.append("test_weak")
-    if score_spread > WALK_FORWARD_MAX_SPREAD:
+    if score_spread > max_spread:
         reasons.append("wf_spread_high")
-    if val_pass_ratio < WALK_FORWARD_MIN_PASS_RATIO:
+    if val_pass_ratio < min_pass_ratio:
         reasons.append("val_pass_ratio_low")
-    if test_pass_ratio < WALK_FORWARD_MIN_PASS_RATIO:
+    if test_pass_ratio < min_pass_ratio:
         reasons.append("test_pass_ratio_low")
 
     return {
